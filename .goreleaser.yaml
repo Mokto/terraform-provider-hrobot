@@ -1,0 +1,42 @@
+project_name: terraform-provider-hrobot
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: provider
+    main: ./main.go
+    # final binary name inside each ZIP:
+    binary: terraform-provider-hrobot_v{{ .Version }}
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      # optional: inject version/address
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: plugin
+    builds: [provider]
+    format: zip
+    # OpenTofu/Terraform expect this filename pattern:
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  # Terraform-style checksum file name:
+  name_template: "terraform-provider-hrobot_{{ .Version }}_SHA256SUMS"
+
+# If you want to sign (recommended):
+# Terraform Registry requires GPG-signed SHASUMS; OpenTofu Registry accepts signatures too.
+# Either sign the checksum (GPG) or each asset (cosign); pick one workflow and automate keys in CI.
+# signs:
+#   - cmd: gpg
+#     artifacts: checksum
+#     args: ["--batch","--yes","--armor","--detach-sign","--output","{{ .ArtifactPath }}.sig","{{ .ArtifactPath }}"]
+
+release:
+  draft: false
+  name_template: "{{ .Tag }}"
+  mode: replace

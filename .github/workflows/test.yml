@@ -1,0 +1,22 @@
+name: Test
+on:
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/test.yml"
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Unit tests
+        run: go test ./internal/... -v
+      - name: Provider tests
+        run: go test ./provider -v -timeout 20m
