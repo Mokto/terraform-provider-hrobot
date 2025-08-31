@@ -1,7 +1,7 @@
 # Terraform / OpenTofu Provider for Hetzner Robot
 
-![build](https://github.com/yourorg/terraform-provider-hrobot/actions/workflows/test.yml/badge.svg)
-![release](https://github.com/yourorg/terraform-provider-hrobot/actions/workflows/release.yml/badge.svg)
+![build](https://github.com/mokto/terraform-provider-hrobot/actions/workflows/test.yml/badge.svg)
+![release](https://github.com/mokto/terraform-provider-hrobot/actions/workflows/release.yml/badge.svg)
 
 A [Terraform](https://www.terraform.io) / [OpenTofu](https://opentofu.org) provider to automate [Hetzner Robot](https://robot.hetzner.com/) bare-metal servers.
 
@@ -32,7 +32,7 @@ Add to your `.tf`:
 terraform {
   required_providers {
     hrobot = {
-      source  = "yourorg/hrobot"
+      source  = "mokto/hrobot"
       version = "~> 0.1"
     }
   }
