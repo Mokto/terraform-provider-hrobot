@@ -44,7 +44,7 @@ provider "hrobot" {
 }
 ```
 
-1. Order a server
+#### Order a server
 
 ```hcl
 resource "hrobot_server_order" "ex101" {
@@ -63,7 +63,7 @@ output "order_transaction_id" {
 At this stage, the order has been placed but the server may take hours/days to be “ready”.
 
 
-2. Inspect the order transaction
+#### Inspect the order transaction
 
 ```hcl
 data "hrobot_order_transaction" "ex101" {
@@ -86,9 +86,9 @@ output "server_ip" {
 server_status  = "in process" or "ready"
 
 
-3. Install an OS automatically
+#### Install an OS automatically
 
-```
+```hcl
 resource "hrobot_installimage" "bootstrap" {
   # Only run installimage if the server is ready
   count         = data.hrobot_order_transaction.ex101.status == "ready" ? 1 : 0
