@@ -118,3 +118,7 @@ output "installed_server_ip" {
   value = hrobot_installimage.bootstrap[0].server_ip
 }
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
