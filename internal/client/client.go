@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,11 +27,13 @@ func (c *Client) do(method, path string, form url.Values, oks ...int) ([]byte, e
 	if form != nil {
 		body = bytes.NewBufferString(form.Encode())
 	}
+	fmt.Println(method, c.base+path, body)
 	req, err := http.NewRequest(method, c.base+path, body)
 	if err != nil {
 		return nil, err
 	}
 	req.SetBasicAuth(c.user, c.pass)
+	fmt.Println(c.user, "password")
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -40,7 +43,10 @@ func (c *Client) do(method, path string, form url.Values, oks ...int) ([]byte, e
 		return nil, err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
 
 	ok := false
 	for _, s := range oks {
@@ -50,9 +56,9 @@ func (c *Client) do(method, path string, form url.Values, oks ...int) ([]byte, e
 		}
 	}
 	if !ok {
+		log.Printf("API request failed with status %d, body: %s", resp.StatusCode, string(b))
 		var ae apiErr
-		_ = json.Unmarshal(b, &ae)
-		if ae.Error.Message != "" {
+		if err := json.Unmarshal(b, &ae); err == nil && ae.Error.Message != "" {
 			return nil, fmt.Errorf("robot: %s: %s", ae.Error.Code, ae.Error.Message)
 		}
 		return nil, fmt.Errorf("robot: unexpected %d: %s", resp.StatusCode, string(b))
