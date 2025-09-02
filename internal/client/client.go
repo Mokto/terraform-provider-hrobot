@@ -158,6 +158,20 @@ func (c *Client) Reset(serverNumber int, typ string) error {
 	return err
 }
 
+func (c *Client) CancelServer(serverNumber int, cancelDate string) error {
+	f := url.Values{}
+	if cancelDate != "" {
+		f.Set("cancellation_date", cancelDate)
+	}
+	_, err := c.do("POST", fmt.Sprintf("/server/%d/cancel", serverNumber), f, 200)
+	return err
+}
+
+func (c *Client) RevokeServerCancellation(serverNumber int) error {
+	_, err := c.do("DELETE", fmt.Sprintf("/server/%d/cancel", serverNumber), nil, 200)
+	return err
+}
+
 func IsNotFound(err error) bool {
 	if err == nil {
 		return false

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -39,6 +40,7 @@ func (r *serverOrderResource) Metadata(_ context.Context, req resource.MetadataR
 
 func (r *serverOrderResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = rschema.Schema{
+		Description: "Manages a Hetzner Robot server order. When destroyed, the server will be scheduled for cancellation at the end of the billing period.",
 		Attributes: map[string]rschema.Attribute{
 			"product_id": rschema.StringAttribute{Required: true, Description: "Robot product id (e.g., EX101)"},
 			"dist":       rschema.StringAttribute{Optional: true, Description: "Preinstall distribution label"},
@@ -61,7 +63,7 @@ func (r *serverOrderResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"transaction_id": rschema.StringAttribute{Computed: true},
 			"status":         rschema.StringAttribute{Computed: true},
 			"server_number":  rschema.Int64Attribute{Computed: true},
-			"server_ip":      rschema.StringAttribute{Computed: true},
+			"server_ip":      rschema.StringAttribute{Computed: true, Description: "The server's IP address (available when server is ready)"},
 			"id":             rschema.StringAttribute{Computed: true},
 		},
 	}
@@ -107,10 +109,10 @@ func (r *serverOrderResource) Create(ctx context.Context, req resource.CreateReq
 	state.Status = types.StringValue(tx.Status)
 	if tx.ServerNumber != nil {
 		state.ServerNumber = types.Int64Value(int64(*tx.ServerNumber))
+	} else {
+		state.ServerNumber = types.Int64Null()
 	}
-	if tx.ServerIP != "" {
-		state.ServerIP = types.StringValue(tx.ServerIP)
-	}
+	state.ServerIP = types.StringValue(tx.ServerIP)
 
 	tflog.Info(ctx, "created order", map[string]interface{}{"transaction_id": tx.ID})
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -141,6 +143,8 @@ func (r *serverOrderResource) Read(ctx context.Context, req resource.ReadRequest
 	state.Status = types.StringValue(tx.Status)
 	if tx.ServerNumber != nil {
 		state.ServerNumber = types.Int64Value(int64(*tx.ServerNumber))
+	} else {
+		state.ServerNumber = types.Int64Null()
 	}
 	state.ServerIP = types.StringValue(tx.ServerIP)
 
@@ -158,8 +162,50 @@ func (r *serverOrderResource) Update(ctx context.Context, req resource.UpdateReq
 	)
 }
 
-func (r *serverOrderResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
-	// noop: removing from state only. Cancellation is a billing action—model it separately on purpose.
+func (r *serverOrderResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state serverOrderModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// If we have a server number, schedule cancellation at the end of billing period
+	if !state.ServerNumber.IsNull() && !state.ServerNumber.IsUnknown() {
+		serverNumber := int(state.ServerNumber.ValueInt64())
+		
+		// Schedule cancellation at the end of the billing period (empty cancelDate means end of period)
+		err := r.api.CancelServer(serverNumber, "")
+		if err != nil {
+			// Log the error but don't fail the delete operation
+			// The server will be removed from Terraform state regardless
+			tflog.Warn(ctx, "Failed to schedule server cancellation", map[string]interface{}{
+				"server_number": serverNumber,
+				"error":         err.Error(),
+			})
+			
+			resp.Diagnostics.AddWarning(
+				"Server Cancellation Failed",
+				fmt.Sprintf("Failed to schedule cancellation for server %d: %s. Please cancel the server manually through the Hetzner Robot interface to stop billing.", serverNumber, err.Error()),
+			)
+		} else {
+			tflog.Info(ctx, "Scheduled server cancellation", map[string]interface{}{
+				"server_number": serverNumber,
+			})
+			
+			resp.Diagnostics.AddWarning(
+				"Server Cancellation Scheduled",
+				fmt.Sprintf("Server %d has been scheduled for cancellation at the end of the billing period. The server will remain active until then.", serverNumber),
+			)
+		}
+	} else {
+		// No server number available, just remove from state
+		tflog.Info(ctx, "Removing server order from state (no server number available)")
+		
+		resp.Diagnostics.AddWarning(
+			"Manual Cancellation May Be Required",
+			"The server order has been removed from Terraform state, but if a server was created, you may need to cancel it manually through the Hetzner Robot interface.",
+		)
+	}
 }
 
 // helpers
