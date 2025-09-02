@@ -3,7 +3,7 @@ project_name: terraform-provider-hrobot
 # Build static binaries for all target platforms
 builds:
   - id: provider
-    main: ./cmd/terraform-provider-hrobot
+    main: ./main.go
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
