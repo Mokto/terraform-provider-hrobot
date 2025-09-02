@@ -86,36 +86,91 @@ output "server_ip" {
 server_status  = "in process" or "ready"
 
 
-#### Install an OS automatically
+#### Configure a server
 
 ```hcl
-resource "hrobot_installimage" "bootstrap" {
-  # Only run installimage if the server is ready
-  count         = data.hrobot_order_transaction.ex101.status == "ready" ? 1 : 0
-  server_number = data.hrobot_order_transaction.ex101.server_number
-
+resource "hrobot_configuration" "web_server" {
+  server_number = 123456  # Replace with your actual server number
+  server_name   = "web-server-01"
+  
+  # Autosetup configuration for Ubuntu 22.04
   autosetup_content = <<-EOT
-    HOSTNAME mynode1
-    DRIVE1 /dev/nvme0n1
-    SWRAID 0
-    BOOTLOADER grub
-    PART /boot  ext4 1024M
-    PART /      ext4 all
-    IMAGE /images/Ubuntu-2404-noble-64-minimal.tar.gz
-    POST_INSTALL /root/post-install.sh
+    #!/bin/bash
+    # Hetzner Online GmbH - installimage
+    
+    # Set the hostname
+    HOSTNAME web-server-01
+    
+    # Set the root password
+    ROOT_PASSWORD your-secure-password
+    
+    # Configure the network
+    INTERFACE 0
+    IP_ADDR 192.168.1.100
+    NETMASK 255.255.255.0
+    GATEWAY 192.168.1.1
+    
+    # Install Ubuntu 22.04
+    DISTRIBUTION ubuntu
+    VERSION 22.04
+    
+    # Configure the disk
+    DRIVE1 /dev/sda
+    PART /boot ext4 512M
+    PART swap swap 4G
+    PART / ext4 all
+    
+    # Configure SSH
+    SSH_PUBLIC_KEY your-ssh-public-key
+    
+    # Run post-install script
+    POSTINSTALL_SCRIPT /root/post-install.sh
   EOT
-
-  # Optional: run ansible-pull on first boot
-  ansible_repo     = "https://github.com/yourorg/infra.git"
-  ansible_playbook = "site.yml"
-  ansible_extra    = "role=k3s_server env=prod"
-
-  # Ensure Rescue accepts our SSH key
-  rescue_authorized_key_fingerprints = [var.robot_key_fp]
+  
+  # Post-install script to configure the server
+  post_install_content = <<-EOT
+    #!/bin/bash
+    set -euo pipefail
+    
+    # Update the system
+    apt-get update
+    apt-get upgrade -y
+    
+    # Install common packages
+    apt-get install -y nginx ufw fail2ban
+    
+    # Configure firewall
+    ufw allow ssh
+    ufw allow 'Nginx Full'
+    ufw --force enable
+    
+    # Configure fail2ban
+    systemctl enable fail2ban
+    systemctl start fail2ban
+    
+    # Start nginx
+    systemctl enable nginx
+    systemctl start nginx
+    
+    echo "Server configuration completed successfully!"
+  EOT
+  
+  # SSH key fingerprints for rescue mode access
+  rescue_authorized_key_fingerprints = [
+    "your-ssh-key-fingerprint-1",
+    "your-ssh-key-fingerprint-2"
+  ]
+  
+  # Timeout for SSH connection (in minutes)
+  ssh_wait_timeout_minutes = 30
 }
+```
 
-output "installed_server_ip" {
-  value = hrobot_installimage.bootstrap[0].server_ip
+
+```hcl
+resource "hrobot_vswitch" "internal_network" {
+  vlan = 4000
+  name = "internal-network"
 }
 ```
 

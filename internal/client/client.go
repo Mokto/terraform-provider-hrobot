@@ -172,6 +172,80 @@ func (c *Client) RevokeServerCancellation(serverNumber int) error {
 	return err
 }
 
+func (c *Client) SetServerName(serverNumber int, serverName string) error {
+	f := url.Values{}
+	f.Set("server_name", serverName)
+	_, err := c.do("POST", fmt.Sprintf("/server/%d", serverNumber), f, 200)
+	return err
+}
+
+// --- VSwitch
+
+func (c *Client) CreateVSwitch(vlan int, name string) (*VSwitch, error) {
+	f := url.Values{}
+	f.Set("vlan", fmt.Sprintf("%d", vlan))
+	f.Set("name", name)
+	
+	b, err := c.do("POST", "/vswitch", f, 201, 200)
+	if err != nil {
+		return nil, err
+	}
+	
+	var env vswitchEnv
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	return &env.VSwitch, nil
+}
+
+func (c *Client) GetVSwitch(id int) (*VSwitch, error) {
+	b, err := c.do("GET", fmt.Sprintf("/vswitch/%d", id), nil, 200)
+	if err != nil {
+		return nil, err
+	}
+	
+	var env vswitchEnv
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	return &env.VSwitch, nil
+}
+
+func (c *Client) ListVSwitches() ([]VSwitch, error) {
+	b, err := c.do("GET", "/vswitch", nil, 200)
+	if err != nil {
+		return nil, err
+	}
+	
+	var env vswitchListEnv
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	return env.VSwitches, nil
+}
+
+func (c *Client) UpdateVSwitch(id int, vlan int, name string) (*VSwitch, error) {
+	f := url.Values{}
+	f.Set("vlan", fmt.Sprintf("%d", vlan))
+	f.Set("name", name)
+	
+	b, err := c.do("POST", fmt.Sprintf("/vswitch/%d", id), f, 200)
+	if err != nil {
+		return nil, err
+	}
+	
+	var env vswitchEnv
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	return &env.VSwitch, nil
+}
+
+func (c *Client) DeleteVSwitch(id int) error {
+	_, err := c.do("DELETE", fmt.Sprintf("/vswitch/%d", id), nil, 200)
+	return err
+}
+
 func IsNotFound(err error) bool {
 	if err == nil {
 		return false

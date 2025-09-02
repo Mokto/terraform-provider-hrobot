@@ -25,6 +25,20 @@ type rescueEnv struct {
 	Rescue Rescue `json:"rescue"`
 }
 
+type VSwitch struct {
+	ID   int    `json:"id"`
+	VLAN int    `json:"vlan"`
+	Name string `json:"name"`
+}
+
+type vswitchEnv struct {
+	VSwitch VSwitch `json:"vswitch"`
+}
+
+type vswitchListEnv struct {
+	VSwitches []VSwitch `json:"vswitch"`
+}
+
 type apiErr struct {
 	Error struct {
 		Status  int    `json:"status"`
