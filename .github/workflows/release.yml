@@ -18,12 +18,15 @@ jobs:
       - name: Test
         run: go test ./...
 
-      # If you GPG-sign the checksum, import your private key here (optional)
-      # - name: Import GPG key
-      #   uses: crazy-max/ghaction-import-gpg@v6
-      #   with:
-      #     gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-      #     passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      # Import the GPG key used to sign SHA256SUMS
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          # passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      # The action exports GPG-related env vars; we’ll use the fingerprint as GPG_KEY
+      - name: Set GPG key env
+        run: echo "GPG_KEY=${GPG_FINGERPRINT}" >> $GITHUB_ENV
 
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -32,3 +35,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_KEY: ${{ env.GPG_KEY }}

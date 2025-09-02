@@ -1,42 +1,51 @@
 project_name: terraform-provider-hrobot
 
-before:
-  hooks:
-    - go mod tidy
-
+# Build static binaries for all target platforms
 builds:
   - id: provider
-    main: ./main.go
-    # final binary name inside each ZIP:
-    binary: terraform-provider-hrobot_v{{ .Version }}
+    main: ./cmd/terraform-provider-hrobot
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    # Terraform/OpenTofu convention: binary includes version with 'v' prefix
+    binary: "terraform-provider-hrobot_v{{ .Version }}"
     ldflags:
       - -s -w
-      # optional: inject version/address
-      - -X main.version={{ .Version }}
 
+# Zip per platform with Terraform/OpenTofu-friendly names
 archives:
-  - id: plugin
+  - id: provider_zips
     builds: [provider]
     format: zip
-    # OpenTofu/Terraform expect this filename pattern:
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # => terraform-provider-hrobot_0.1.0_linux_amd64.zip etc.
+    name_template: "terraform-provider-hrobot_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
 
+# Produce the checksum file that registries expect
 checksum:
-  # Terraform-style checksum file name:
   name_template: "terraform-provider-hrobot_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
 
-# If you want to sign (recommended):
-# Terraform Registry requires GPG-signed SHASUMS; OpenTofu Registry accepts signatures too.
-# Either sign the checksum (GPG) or each asset (cosign); pick one workflow and automate keys in CI.
-# signs:
-#   - cmd: gpg
-#     artifacts: checksum
-#     args: ["--batch","--yes","--armor","--detach-sign","--output","{{ .ArtifactPath }}.sig","{{ .ArtifactPath }}"]
+# Sign ONLY the checksum file (this creates ...SHA256SUMS.sig)
+signs:
+  - id: checksum
+    artifacts: checksum
+    cmd: gpg
+    args:
+      - --armor
+      - --batch
+      - --yes
+      - --local-user
+      - "{{ .Env.GPG_KEY }}"
+      - --output
+      - "${artifact}.sig"
+      - --detach-sign
+      - "${artifact}"
 
 release:
+  # Attach archives + SHA256SUMS + SHA256SUMS.sig to the GitHub Release
   draft: false
-  name_template: "{{ .Tag }}"
+  replace_existing_draft: true
   mode: replace
