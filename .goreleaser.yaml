@@ -37,8 +37,6 @@ signs:
       - --armor
       - --batch
       - --yes
-      - --local-user
-      - "{{ .Env.GPG_KEY }}"
       - --output
       - "${artifact}.sig"
       - --detach-sign
