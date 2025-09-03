@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 type Client struct {
@@ -27,13 +28,12 @@ func (c *Client) do(method, path string, form url.Values, oks ...int) ([]byte, e
 	if form != nil {
 		body = bytes.NewBufferString(form.Encode())
 	}
-	fmt.Println(method, c.base+path, body)
+	log.Printf("CALLING: %s", c.base+path)
 	req, err := http.NewRequest(method, c.base+path, body)
 	if err != nil {
 		return nil, err
 	}
 	req.SetBasicAuth(c.user, c.pass)
-	fmt.Println(c.user, "password")
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -163,12 +163,7 @@ func (c *Client) CancelServer(serverNumber int, cancelDate string) error {
 	if cancelDate != "" {
 		f.Set("cancellation_date", cancelDate)
 	}
-	_, err := c.do("POST", fmt.Sprintf("/server/%d/cancel", serverNumber), f, 200)
-	return err
-}
-
-func (c *Client) RevokeServerCancellation(serverNumber int) error {
-	_, err := c.do("DELETE", fmt.Sprintf("/server/%d/cancel", serverNumber), nil, 200)
+	_, err := c.do("DELETE", fmt.Sprintf("/server/%d/cancellation", serverNumber), f, 200)
 	return err
 }
 
@@ -185,12 +180,12 @@ func (c *Client) CreateVSwitch(vlan int, name string) (*VSwitch, error) {
 	f := url.Values{}
 	f.Set("vlan", fmt.Sprintf("%d", vlan))
 	f.Set("name", name)
-	
+
 	b, err := c.do("POST", "/vswitch", f, 201, 200)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var env vswitchEnv
 	if err := json.Unmarshal(b, &env); err != nil {
 		return nil, err
@@ -203,11 +198,25 @@ func (c *Client) GetVSwitch(id int) (*VSwitch, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
+	// Debug: log the raw response
+	log.Printf("GetVSwitch response for ID %d: %s", id, string(b))
+
+	// Try to unmarshal as direct VSwitch first
+	var vswitch VSwitch
+	if err := json.Unmarshal(b, &vswitch); err == nil {
+		log.Printf("Parsed VSwitch directly: ID=%d, VLAN=%d, Name='%s'", vswitch.ID, vswitch.VLAN, vswitch.Name)
+		return &vswitch, nil
+	}
+
+	// If that fails, try the wrapped format
 	var env vswitchEnv
 	if err := json.Unmarshal(b, &env); err != nil {
+		log.Printf("Failed to unmarshal VSwitch response: %v", err)
 		return nil, err
 	}
+	
+	log.Printf("Parsed VSwitch wrapped: ID=%d, VLAN=%d, Name='%s'", env.VSwitch.ID, env.VSwitch.VLAN, env.VSwitch.Name)
 	return &env.VSwitch, nil
 }
 
@@ -216,7 +225,7 @@ func (c *Client) ListVSwitches() ([]VSwitch, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var env vswitchListEnv
 	if err := json.Unmarshal(b, &env); err != nil {
 		return nil, err
@@ -228,12 +237,12 @@ func (c *Client) UpdateVSwitch(id int, vlan int, name string) (*VSwitch, error) 
 	f := url.Values{}
 	f.Set("vlan", fmt.Sprintf("%d", vlan))
 	f.Set("name", name)
-	
+
 	b, err := c.do("POST", fmt.Sprintf("/vswitch/%d", id), f, 200)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var env vswitchEnv
 	if err := json.Unmarshal(b, &env); err != nil {
 		return nil, err
@@ -242,8 +251,91 @@ func (c *Client) UpdateVSwitch(id int, vlan int, name string) (*VSwitch, error) 
 }
 
 func (c *Client) DeleteVSwitch(id int) error {
-	_, err := c.do("DELETE", fmt.Sprintf("/vswitch/%d", id), nil, 200)
+	_, err := c.do("DELETE", fmt.Sprintf("/vswitch/%d?cancellation_date=%s", id, "now"), nil, 200)
 	return err
+}
+
+// --- Server Management
+
+// GetAllServers fetches all servers in one API call
+func (c *Client) GetAllServers() ([]Server, error) {
+	b, err := c.do("GET", "/server", nil, 200)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp serversResponse
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.Server, nil
+}
+
+// GetServerFromBulk finds a specific server from bulk data
+func (c *Client) GetServerFromBulk(serverNumber int, servers []Server) (*Server, error) {
+	for _, server := range servers {
+		if server.ServerNumber == serverNumber {
+			return &server, nil
+		}
+	}
+
+	return nil, fmt.Errorf("server %d not found", serverNumber)
+}
+
+// --- Simple Cache Manager
+
+type CacheManager struct {
+	servers []Server
+	fetched bool
+	mutex   sync.RWMutex
+}
+
+func NewCacheManager() *CacheManager {
+	return &CacheManager{}
+}
+
+// GetServers fetches all servers once per apply, then returns cached data
+func (cm *CacheManager) GetServers(client *Client) ([]Server, error) {
+	cm.mutex.RLock()
+	if cm.fetched {
+		servers := make([]Server, len(cm.servers))
+		copy(servers, cm.servers)
+		cm.mutex.RUnlock()
+		return servers, nil
+	}
+	cm.mutex.RUnlock()
+
+	// Need to fetch data
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	// Double-check in case another goroutine already fetched
+	if cm.fetched {
+		servers := make([]Server, len(cm.servers))
+		copy(servers, cm.servers)
+		return servers, nil
+	}
+
+	servers, err := client.GetAllServers()
+	if err != nil {
+		return nil, err
+	}
+
+	cm.servers = servers
+	cm.fetched = true
+
+	return servers, nil
+}
+
+// GetServer finds a specific server from cached data
+func (cm *CacheManager) GetServer(client *Client, serverNumber int) (*Server, error) {
+	servers, err := cm.GetServers(client)
+	if err != nil {
+		return nil, err
+	}
+
+	return client.GetServerFromBulk(serverNumber, servers)
 }
 
 func IsNotFound(err error) bool {

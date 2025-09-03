@@ -13,7 +13,7 @@ import (
 )
 
 type vswitchResource struct {
-	api *client.Client
+	providerData *ProviderData
 }
 
 type vswitchModel struct {
@@ -54,7 +54,7 @@ func (r *vswitchResource) Configure(_ context.Context, req resource.ConfigureReq
 	if req.ProviderData == nil {
 		return
 	}
-	r.api = req.ProviderData.(*client.Client)
+	r.providerData = req.ProviderData.(*ProviderData)
 }
 
 func (r *vswitchResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -64,7 +64,7 @@ func (r *vswitchResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	vswitch, err := r.api.CreateVSwitch(int(plan.VLAN.ValueInt64()), plan.Name.ValueString())
+	vswitch, err := r.providerData.Client.CreateVSwitch(int(plan.VLAN.ValueInt64()), plan.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create vSwitch", err.Error())
 		return
@@ -97,7 +97,7 @@ func (r *vswitchResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	vswitch, err := r.api.GetVSwitch(int(state.ID.ValueInt64()))
+	vswitch, err := r.providerData.Client.GetVSwitch(int(state.ID.ValueInt64()))
 	if client.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -137,7 +137,7 @@ func (r *vswitchResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	vswitch, err := r.api.UpdateVSwitch(int(state.ID.ValueInt64()), int(plan.VLAN.ValueInt64()), plan.Name.ValueString())
+	vswitch, err := r.providerData.Client.UpdateVSwitch(int(state.ID.ValueInt64()), int(plan.VLAN.ValueInt64()), plan.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update vSwitch", err.Error())
 		return
@@ -167,7 +167,7 @@ func (r *vswitchResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	err := r.api.DeleteVSwitch(int(state.ID.ValueInt64()))
+	err := r.providerData.Client.DeleteVSwitch(int(state.ID.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to delete vSwitch", err.Error())
 		return
@@ -185,7 +185,7 @@ func (r *vswitchResource) ImportState(ctx context.Context, req resource.ImportSt
 		return
 	}
 
-	vswitch, err := r.api.GetVSwitch(id)
+	vswitch, err := r.providerData.Client.GetVSwitch(id)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to import vSwitch", err.Error())
 		return

@@ -39,6 +39,20 @@ type vswitchListEnv struct {
 	VSwitches []VSwitch `json:"vswitch"`
 }
 
+type Server struct {
+	ServerNumber int    `json:"server_number"`
+	ServerName   string `json:"server_name"`
+	ServerIP     string `json:"server_ip"`
+	Status       string `json:"status"`
+	Product      string `json:"product"`
+	Location     string `json:"location"`
+	// Add other fields as needed based on Hetzner API response
+}
+
+type serversResponse struct {
+	Server []Server `json:"server"`
+}
+
 type apiErr struct {
 	Error struct {
 		Status  int    `json:"status"`

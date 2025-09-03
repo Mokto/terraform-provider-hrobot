@@ -13,7 +13,7 @@ import (
 	sshx "github.com/mokto/terraform-provider-hrobot/internal/ssh"
 )
 
-type configurationResource struct{ api *client.Client }
+type configurationResource struct{ providerData *ProviderData }
 
 type configurationModel struct {
 	ID           types.String `tfsdk:"id"`
@@ -70,7 +70,7 @@ func (r *configurationResource) Configure(_ context.Context, req resource.Config
 	if req.ProviderData == nil {
 		return
 	}
-	r.api = req.ProviderData.(*client.Client)
+	r.providerData = req.ProviderData.(*ProviderData)
 }
 
 func (r *configurationResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -87,7 +87,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 
 	// 1) Set server name if provided
 	if !plan.ServerName.IsNull() && !plan.ServerName.IsUnknown() && plan.ServerName.ValueString() != "" {
-		err := r.api.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.ServerName.ValueString())
+		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.ServerName.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("set server name failed", err.Error())
 			return
@@ -99,7 +99,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	}
 
 	// 2) Activate Rescue
-	rescue, err := r.api.ActivateRescue(int(plan.ServerNumber.ValueInt64()), client.RescueParams{
+	rescue, err := r.providerData.Client.ActivateRescue(int(plan.ServerNumber.ValueInt64()), client.RescueParams{
 		OS:            "linux",
 		AuthorizedFPs: fp,
 	})
@@ -110,7 +110,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	ip := rescue.ServerIP
 
 	// 3) Reset into Rescue
-	if err := r.api.Reset(int(plan.ServerNumber.ValueInt64()), "hw"); err != nil {
+	if err := r.providerData.Client.Reset(int(plan.ServerNumber.ValueInt64()), "hw"); err != nil {
 		resp.Diagnostics.AddError("reset failed", err.Error())
 		return
 	}
@@ -209,7 +209,7 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 
 	// Check if server name changed and update it
 	if !plan.ServerName.IsNull() && !plan.ServerName.IsUnknown() && plan.ServerName.ValueString() != "" {
-		err := r.api.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.ServerName.ValueString())
+		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.ServerName.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("update server name failed", err.Error())
 			return

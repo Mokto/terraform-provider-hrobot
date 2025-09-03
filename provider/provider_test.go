@@ -122,15 +122,43 @@ resource "hrobot_server_order" "ex101" {
 	})
 }
 
-func TestAcc_OrderTransaction_DataAndGuardedInstall(t *testing.T) {
-	ts := newRobotMockServer(t)
+func TestAcc_ServerOrder_CachingBehavior(t *testing.T) {
+	// Create a mock server that tracks transaction API calls specifically
+	transactionCallCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/order/server/transaction" {
+			transactionCallCount++
+			// Order creation - returns "in process" status
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"transaction": map[string]any{
+					"id":     "txn-cache-test",
+					"status": "in process",
+				},
+			})
+		} else if r.URL.Path == "/order/server/transaction/txn-cache-test" {
+			transactionCallCount++
+			// Transaction lookup - return ready status (simulating status change)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"transaction": map[string]any{
+					"id":            "txn-cache-test",
+					"status":        "ready",
+					"server_number": 123456,
+					"server_ip":     "192.168.1.100",
+					"date":          "2024-01-01T00:00:00Z",
+				},
+			})
+		} else if r.Method == "DELETE" && r.URL.Path == "/server/123456/cancellation" {
+			// Server cancellation - not counted as transaction call
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
 	defer ts.Close()
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testProviderFactories(),
 		Steps: []resource.TestStep{
 			{
-				// The data source returns server_number/ip; installimage is count=0 to avoid SSH in test.
+				// First step - create order (should make 1 transaction API call: POST)
 				Config: fmt.Sprintf(`
 provider "hrobot" {
   username = "u"
@@ -138,34 +166,68 @@ provider "hrobot" {
   base_url = "%s"
 }
 
-resource "hrobot_server_order" "ex101" {
+resource "hrobot_server_order" "test" {
   product_id = "EX101"
-}
-
-data "hrobot_order_transaction" "ex101" {
-  transaction_id = hrobot_server_order.ex101.transaction_id
-}
-
-resource "hrobot_installimage" "bootstrap" {
-  count         = 0
-  server_number = try(data.hrobot_order_transaction.ex101.server_number, 0)
-  autosetup_content = <<-EOT
-HOSTNAME test
-DRIVE1 /dev/sda
-SWRAID 0
-IMAGE /images/Debian-1204-bookworm-64-minimal.tar.gz
-POST_INSTALL /root/post-install.sh
-EOT
 }
 `, ts.URL),
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("hrobot_server_order.ex101", "transaction_id", "txn-acc"),
-					resource.TestCheckResourceAttr("data.hrobot_order_transaction.ex101", "server_ip", "198.51.100.20"),
+					resource.TestCheckResourceAttr("hrobot_server_order.test", "transaction_id", "txn-cache-test"),
+					resource.TestCheckResourceAttr("hrobot_server_order.test", "status", "in process"),
+				),
+			},
+			{
+				// Second step - should make API call since status is "in process" and get updated status
+				Config: fmt.Sprintf(`
+provider "hrobot" {
+  username = "u"
+  password = "p"
+  base_url = "%s"
+}
+
+resource "hrobot_server_order" "test" {
+  product_id = "EX101"
+}
+`, ts.URL),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("hrobot_server_order.test", "transaction_id", "txn-cache-test"),
+					resource.TestCheckResourceAttr("hrobot_server_order.test", "status", "ready"),
+					resource.TestCheckResourceAttr("hrobot_server_order.test", "server_ip", "192.168.1.100"),
+				),
+			},
+			{
+				// Third step - should use cached data since status is now "ready" (final state)
+				Config: fmt.Sprintf(`
+provider "hrobot" {
+  username = "u"
+  password = "p"
+  base_url = "%s"
+}
+
+resource "hrobot_server_order" "test" {
+  product_id = "EX101"
+}
+`, ts.URL),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("hrobot_server_order.test", "transaction_id", "txn-cache-test"),
+					resource.TestCheckResourceAttr("hrobot_server_order.test", "status", "ready"),
+					resource.TestCheckResourceAttr("hrobot_server_order.test", "server_ip", "192.168.1.100"),
 				),
 			},
 		},
 	})
+
+	// Verify that only 2 transaction API calls were made:
+	// 1. POST for order creation
+	// 2. GET for first read (status "in process" -> makes API call)
+	// 3. GET for second read (status "ready" -> uses cached data, no API call)
+	if transactionCallCount != 2 {
+		t.Errorf("Expected 2 transaction API calls (POST + GET), got %d", transactionCallCount)
+	}
 }
+
+// Test removed - data source no longer exists
+
+// Data source caching test removed - data source no longer exists
 
 // keep a reference so linters don't complain about unused imports in some setups
 var _ = context.Background()

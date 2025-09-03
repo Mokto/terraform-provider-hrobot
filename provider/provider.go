@@ -18,6 +18,12 @@ type hrobotProvider struct {
 	version string
 }
 
+// ProviderData holds both client and cache manager for resources
+type ProviderData struct {
+	Client       *client.Client
+	CacheManager *client.CacheManager
+}
+
 func New(version string) func() provider.Provider {
 	return func() provider.Provider { return &hrobotProvider{version: version} }
 }
@@ -85,10 +91,16 @@ func (p *hrobotProvider) Configure(ctx context.Context, req provider.ConfigureRe
 
 	httpClient := &http.Client{Timeout: timeout}
 	c := client.New(base, username, password, httpClient)
+	cacheManager := client.NewCacheManager()
+
+	providerData := &ProviderData{
+		Client:       c,
+		CacheManager: cacheManager,
+	}
 
 	tflog.Info(ctx, "Configured hrobot provider", map[string]interface{}{"base_url": base})
-	resp.DataSourceData = c
-	resp.ResourceData = c
+	resp.DataSourceData = providerData
+	resp.ResourceData = providerData
 }
 
 func (p *hrobotProvider) Resources(_ context.Context) []func() resource.Resource {
@@ -101,6 +113,6 @@ func (p *hrobotProvider) Resources(_ context.Context) []func() resource.Resource
 
 func (p *hrobotProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
-		NewDataOrderTransaction,
+		NewDataServers,
 	}
 }
