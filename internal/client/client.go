@@ -186,9 +186,37 @@ func (c *Client) CreateVSwitch(vlan int, name string) (*VSwitch, error) {
 		return nil, err
 	}
 
+	// Debug: log the raw response
+	log.Printf("CreateVSwitch response: %s", string(b))
+
+	// Try to unmarshal as direct VSwitch first
+	var vswitch VSwitch
+	if err := json.Unmarshal(b, &vswitch); err == nil {
+		log.Printf("Parsed VSwitch directly: ID=%d, VLAN=%d, Name='%s'", vswitch.ID, vswitch.VLAN, vswitch.Name)
+		// If the API response doesn't include vlan/name, use the values we sent
+		if vswitch.VLAN == 0 {
+			vswitch.VLAN = vlan
+		}
+		if vswitch.Name == "" {
+			vswitch.Name = name
+		}
+		return &vswitch, nil
+	}
+
+	// If that fails, try the wrapped format
 	var env vswitchEnv
 	if err := json.Unmarshal(b, &env); err != nil {
+		log.Printf("Failed to unmarshal VSwitch response: %v", err)
 		return nil, err
+	}
+	
+	log.Printf("Parsed VSwitch wrapped: ID=%d, VLAN=%d, Name='%s'", env.VSwitch.ID, env.VSwitch.VLAN, env.VSwitch.Name)
+	// If the API response doesn't include vlan/name, use the values we sent
+	if env.VSwitch.VLAN == 0 {
+		env.VSwitch.VLAN = vlan
+	}
+	if env.VSwitch.Name == "" {
+		env.VSwitch.Name = name
 	}
 	return &env.VSwitch, nil
 }
@@ -243,9 +271,37 @@ func (c *Client) UpdateVSwitch(id int, vlan int, name string) (*VSwitch, error) 
 		return nil, err
 	}
 
+	// Debug: log the raw response
+	log.Printf("UpdateVSwitch response: %s", string(b))
+
+	// Try to unmarshal as direct VSwitch first
+	var vswitch VSwitch
+	if err := json.Unmarshal(b, &vswitch); err == nil {
+		log.Printf("Parsed VSwitch directly: ID=%d, VLAN=%d, Name='%s'", vswitch.ID, vswitch.VLAN, vswitch.Name)
+		// If the API response doesn't include vlan/name, use the values we sent
+		if vswitch.VLAN == 0 {
+			vswitch.VLAN = vlan
+		}
+		if vswitch.Name == "" {
+			vswitch.Name = name
+		}
+		return &vswitch, nil
+	}
+
+	// If that fails, try the wrapped format
 	var env vswitchEnv
 	if err := json.Unmarshal(b, &env); err != nil {
+		log.Printf("Failed to unmarshal VSwitch response: %v", err)
 		return nil, err
+	}
+	
+	log.Printf("Parsed VSwitch wrapped: ID=%d, VLAN=%d, Name='%s'", env.VSwitch.ID, env.VSwitch.VLAN, env.VSwitch.Name)
+	// If the API response doesn't include vlan/name, use the values we sent
+	if env.VSwitch.VLAN == 0 {
+		env.VSwitch.VLAN = vlan
+	}
+	if env.VSwitch.Name == "" {
+		env.VSwitch.Name = name
 	}
 	return &env.VSwitch, nil
 }
