@@ -10,6 +10,7 @@ import (
 	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/mokto/terraform-provider-hrobot/internal/client"
 	sshx "github.com/mokto/terraform-provider-hrobot/internal/ssh"
 )
 
@@ -22,6 +23,7 @@ type configurationModel struct {
 	ServerName   types.String `tfsdk:"server_name"`
 	Description  types.String `tfsdk:"description"`
 	VSwitchID    types.Int64  `tfsdk:"vswitch_id"`
+	Version      types.Int64  `tfsdk:"version"`
 
 	// Autosetup parameters
 	Arch          types.String `tfsdk:"arch"`
@@ -63,6 +65,7 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 			"server_name":   rschema.StringAttribute{Required: true, Description: "Custom name for the server (used as hostname in autosetup)"},
 			"description":   rschema.StringAttribute{Optional: true, Description: "Custom description for the server"},
 			"vswitch_id":    rschema.Int64Attribute{Optional: true, Description: "ID of the vSwitch to connect the server to"},
+			"version":       rschema.Int64Attribute{Optional: true, Description: "Version of the node, will trigger rescue + full install on each change"},
 
 			// Autosetup parameters
 			"arch":          rschema.StringAttribute{Required: true, Description: "Architecture for the OS image (arm64 or amd64)"},
@@ -92,87 +95,98 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
-	fp := mustStringSlice(ctx, resp, plan.RescueKeyFPs)
+	fp := mustStringSliceCreate(ctx, resp, plan.RescueKeyFPs)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	ip := plan.ServerIP.ValueString()
 
-	// // 1) Set server name if provided
-	// if !plan.ServerName.IsNull() && !plan.ServerName.IsUnknown() && plan.ServerName.ValueString() != "" {
-	// 	tflog.Info(ctx, "setting server name", map[string]interface{}{
-	// 		"server_number": plan.ServerNumber.ValueInt64(),
-	// 		"server_name":   plan.ServerName.ValueString(),
-	// 	})
+	// 1) Set server name if provided
+	if !plan.ServerName.IsNull() && !plan.ServerName.IsUnknown() && plan.ServerName.ValueString() != "" {
+		tflog.Info(ctx, "setting server name", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"server_name":   plan.ServerName.ValueString(),
+		})
 
-	// 	err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.ServerName.ValueString())
-	// 	if err != nil {
-	// 		resp.Diagnostics.AddError("set server name failed", err.Error())
-	// 		return
-	// 	}
-	// 	tflog.Info(ctx, "server name set successfully", map[string]interface{}{
-	// 		"server_number": plan.ServerNumber.ValueInt64(),
-	// 		"server_name":   plan.ServerName.ValueString(),
-	// 	})
-	// }
+		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.ServerName.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("set server name failed", err.Error())
+			return
+		}
+		tflog.Info(ctx, "server name set successfully", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"server_name":   plan.ServerName.ValueString(),
+		})
+	}
+	//
+	//
+	// Add server to vswitch if provided
+	if !plan.VSwitchID.IsNull() && !plan.VSwitchID.IsUnknown() {
+		serverIP := plan.ServerIP.ValueString()
 
-	// // 3) Activate Rescue
-	// tflog.Info(ctx, "activating rescue mode", map[string]interface{}{
-	// 	"server_number":         plan.ServerNumber.ValueInt64(),
-	// 	"authorized_keys_count": len(fp),
-	// })
+		tflog.Info(ctx, "adding server to vswitch", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"server_ip":     serverIP,
+			"vswitch_id":    plan.VSwitchID.ValueInt64(),
+		})
 
-	// rescue, err := r.providerData.Client.ActivateRescue(int(plan.ServerNumber.ValueInt64()), client.RescueParams{
-	// 	OS:            "linux",
-	// 	AuthorizedFPs: fp,
-	// })
-	// if err != nil {
-	// 	resp.Diagnostics.AddError("activate rescue failed", err.Error())
-	// 	return
-	// }
+		err := r.providerData.Client.AddServerToVSwitch(int(plan.VSwitchID.ValueInt64()), serverIP)
+		if err != nil {
+			resp.Diagnostics.AddError("add server to vswitch failed", err.Error())
+			return
+		}
 
-	// tflog.Info(ctx, "rescue mode activated", map[string]interface{}{
-	// 	"server_number": plan.ServerNumber.ValueInt64(),
-	// 	"server_ip":     ip,
-	// })
+		tflog.Info(ctx, "server added to vswitch successfully", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"server_ip":     serverIP,
+			"vswitch_id":    plan.VSwitchID.ValueInt64(),
+		})
+	}
 
-	// // 4) Reset into Rescue
-	// tflog.Info(ctx, "resetting server to rescue mode", map[string]interface{}{
-	// 	"server_number": plan.ServerNumber.ValueInt64(),
-	// })
+	// Configure
+	err_summary, err := r.configure(fp, ip, plan, ctx)
+	if err_summary != "" {
+		resp.Diagnostics.AddError(err_summary, err)
+	}
 
-	// if err := r.providerData.Client.Reset(int(plan.ServerNumber.ValueInt64()), "hw"); err != nil {
-	// 	resp.Diagnostics.AddError("reset failed", err.Error())
-	// 	return
-	// }
+	state := plan
+	state.ID = types.StringValue(fmt.Sprintf("configuration-%d", time.Now().Unix()))
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
 
-	// tflog.Info(ctx, "server reset completed", map[string]interface{}{
-	// 	"server_number": plan.ServerNumber.ValueInt64(),
-	// })
+func (r *configurationResource) configure(fp []string, ip string, plan configurationModel, ctx context.Context) (string, string) {
+	// 3) Activate Rescue
+	tflog.Info(ctx, "activating rescue mode", map[string]interface{}{
+		"server_number":         plan.ServerNumber.ValueInt64(),
+		"authorized_keys_count": len(fp),
+	})
 
-	// // Add server to vswitch if provided
-	// if !plan.VSwitchID.IsNull() && !plan.VSwitchID.IsUnknown() {
-	// 	serverIP := plan.ServerIP.ValueString()
+	_, err := r.providerData.Client.ActivateRescue(int(plan.ServerNumber.ValueInt64()), client.RescueParams{
+		OS:            "linux",
+		AuthorizedFPs: fp,
+	})
+	if err != nil {
+		return "activate rescue failed", err.Error()
+	}
 
-	// 	tflog.Info(ctx, "adding server to vswitch", map[string]interface{}{
-	// 		"server_number": plan.ServerNumber.ValueInt64(),
-	// 		"server_ip":     serverIP,
-	// 		"vswitch_id":    plan.VSwitchID.ValueInt64(),
-	// 	})
+	tflog.Info(ctx, "rescue mode activated", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_ip":     ip,
+	})
 
-	// 	err := r.providerData.Client.AddServerToVSwitch(int(plan.VSwitchID.ValueInt64()), serverIP)
-	// 	if err != nil {
-	// 		resp.Diagnostics.AddError("add server to vswitch failed", err.Error())
-	// 		return
-	// 	}
+	// 4) Reset into Rescue
+	tflog.Info(ctx, "resetting server to rescue mode", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+	})
 
-	// 	tflog.Info(ctx, "server added to vswitch successfully", map[string]interface{}{
-	// 		"server_number": plan.ServerNumber.ValueInt64(),
-	// 		"server_ip":     serverIP,
-	// 		"vswitch_id":    plan.VSwitchID.ValueInt64(),
-	// 	})
-	// }
+	if err := r.providerData.Client.Reset(int(plan.ServerNumber.ValueInt64()), "hw"); err != nil {
+		return "reset failed", err.Error()
+	}
+
+	tflog.Info(ctx, "server reset completed", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+	})
 
 	// 5) Wait for SSH
 	waitMin := int64(20)
@@ -183,8 +197,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	})
 
 	if err := waitTCP(ip+":22", time.Duration(waitMin)*time.Minute); err != nil {
-		resp.Diagnostics.AddError("rescue ssh timeout", err.Error())
-		return
+		return "rescue ssh timeout", err.Error()
 	}
 
 	tflog.Info(ctx, "SSH is now available", map[string]interface{}{
@@ -209,12 +222,11 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 		tflog.Info(ctx, "establishing SSH connection with agent")
 		auth = sshx.AuthFromAgent()
 	} else {
-		resp.Diagnostics.AddError("no ssh keys", "At least one rescue_authorized_key_fingerprint is required for SSH access")
+		return "no ssh keys", "At least one rescue_authorized_key_fingerprint is required for SSH access"
 	}
 	conn, closeFn, err := sshx.Connect(sshx.Conn{Host: ip, User: "root", Timeout: 3 * time.Minute, Auth: auth, InsecureIgnoreHostKey: true})
 	if err != nil {
-		resp.Diagnostics.AddError("ssh connect", err.Error())
-		return
+		return "ssh connect", err.Error()
 	}
 	defer closeFn()
 
@@ -242,8 +254,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	})
 
 	if err := sshx.Upload(conn, "/root/setup.conf", []byte(autosetupContent), 0600); err != nil {
-		resp.Diagnostics.AddError("upload autosetup", err.Error())
-		return
+		return "upload autosetup", err.Error()
 	}
 
 	tflog.Info(ctx, "autosetup configuration uploaded", map[string]interface{}{
@@ -259,8 +270,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	})
 
 	if err := sshx.Upload(conn, "/root/post-install.sh", []byte(postinstallContent), 0700); err != nil {
-		resp.Diagnostics.AddError("upload post-install", err.Error())
-		return
+		return "upload post-install", err.Error()
 	}
 
 	tflog.Info(ctx, "setting postinstall script permissions", map[string]interface{}{
@@ -281,8 +291,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	})
 
 	if _, err := sshx.Run(conn, "/root/.oldroot/nfs/install/installimage -a -c /root/setup.conf"); err != nil {
-		resp.Diagnostics.AddError("installimage failed", err.Error())
-		return
+		return "installimage failed", err.Error()
 	}
 
 	// run postinstall
@@ -291,8 +300,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 		"server_ip":     ip,
 	})
 	if _, err := sshx.Run(conn, "/root/post-install.sh"); err != nil {
-		resp.Diagnostics.AddError("post-install script failed", err.Error())
-		return
+		return "post-install script failed", err.Error()
 	}
 
 	tflog.Info(ctx, "all completed, rebooting server", map[string]interface{}{
@@ -318,8 +326,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 
 		// give a little more
 		if err2 := waitTCP(ip+":22", 15*time.Minute); err2 != nil {
-			resp.Diagnostics.AddError("os ssh timeout", fmt.Sprintf("%v / %v", err, err2))
-			return
+			return "os ssh timeout", fmt.Sprintf("%v / %v", err, err2)
 		}
 	}
 
@@ -328,16 +335,13 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 		"server_ip":     ip,
 	})
 
-	state := plan
-	state.ID = types.StringValue(fmt.Sprintf("configuration-%d", time.Now().Unix()))
-	// ServerIP is already set from the plan since it's now required
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 	tflog.Info(ctx, "configuration finished", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
 		"server_name":   plan.ServerName.ValueString(),
 		"ip":            plan.ServerIP.ValueString(),
 	})
+
+	return "", ""
 }
 
 func (r *configurationResource) Read(_ context.Context, _ resource.ReadRequest, _ *resource.ReadResponse) {
@@ -385,6 +389,20 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 				"vswitch_id":    plan.VSwitchID.ValueInt64(),
 			})
 		}
+	}
+
+	if !plan.Version.IsNull() && !plan.Version.IsUnknown() {
+		summary, err := r.configure(mustStringSliceUpdate(ctx, resp, plan.RescueKeyFPs), plan.ServerIP.ValueString(), plan, ctx)
+		if err != "" {
+			resp.Diagnostics.AddError(summary, err)
+			return
+		}
+		tflog.Info(ctx, "reconfigured server due to version change", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"version":       plan.Version.ValueInt64(),
+		})
+		resp.Diagnostics.AddWarning("Reconfiguration completed", "The server has been reconfigured due to a version change. Note that this does not update the version in the state; please ensure the version is updated in the Terraform configuration if needed.")
+		return
 	}
 
 	// For other changes, we need to recreate the resource

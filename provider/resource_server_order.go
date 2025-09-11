@@ -224,8 +224,8 @@ func (r *serverOrderResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	keys := mustStringSlice(ctx, resp, plan.Keys)
-	addons := mustStringSlice(ctx, resp, plan.Addons)
+	keys := mustStringSliceCreate(ctx, resp, plan.Keys)
+	addons := mustStringSliceCreate(ctx, resp, plan.Addons)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -350,7 +350,15 @@ func (r *serverOrderResource) Delete(ctx context.Context, req resource.DeleteReq
 }
 
 // helpers
-func mustStringSlice(ctx context.Context, resp *resource.CreateResponse, l types.List) []string {
+func mustStringSliceCreate(ctx context.Context, resp *resource.CreateResponse, l types.List) []string {
+	if l.IsNull() || l.IsUnknown() {
+		return nil
+	}
+	var out []string
+	resp.Diagnostics.Append(l.ElementsAs(ctx, &out, false)...)
+	return out
+}
+func mustStringSliceUpdate(ctx context.Context, resp *resource.UpdateResponse, l types.List) []string {
 	if l.IsNull() || l.IsUnknown() {
 		return nil
 	}
