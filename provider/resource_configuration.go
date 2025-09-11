@@ -23,18 +23,31 @@ type configurationModel struct {
 	Description  types.String `tfsdk:"description"`
 	VSwitchID    types.Int64  `tfsdk:"vswitch_id"`
 
-	Autosetup   types.String `tfsdk:"autosetup_content"`
+	// Autosetup parameters
+	Arch          types.String `tfsdk:"arch"`
+	CryptPassword types.String `tfsdk:"cryptpassword"`
+
 	PostInstall types.String `tfsdk:"post_install_content"`
 
-	AnsibleRepo     types.String `tfsdk:"ansible_repo"`
-	AnsiblePlaybook types.String `tfsdk:"ansible_playbook"`
-	AnsibleExtra    types.String `tfsdk:"ansible_extra"`
-
-	RescueKeyFPs   types.List  `tfsdk:"rescue_authorized_key_fingerprints"`
-	SSHWaitMinutes types.Int64 `tfsdk:"ssh_wait_timeout_minutes"`
+	RescueKeyFPs types.List `tfsdk:"rescue_authorized_key_fingerprints"`
 }
 
 func NewResourceConfiguration() resource.Resource { return &configurationResource{} }
+
+// buildAutosetupContent generates autosetup configuration from parameters
+func buildAutosetupContent(serverName, arch, cryptPassword string) string {
+	// Build the autosetup content
+	content := fmt.Sprintf(`CRYPTPASSWORD %s
+DRIVE1 /dev/sda
+BOOTLOADER grub
+PART /boot/efi esp 512M
+PART /boot ext4 1G
+PART /     ext4 all crypt
+IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
+HOSTNAME %s`, cryptPassword, arch, serverName)
+
+	return content
+}
 
 func (r *configurationResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_configuration"
@@ -45,25 +58,21 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 		Description: "Manages Hetzner Robot server configuration including server naming, OS installation, and post-install setup.",
 		Attributes: map[string]rschema.Attribute{
 			"server_number": rschema.Int64Attribute{Required: true, Description: "Robot server number"},
-			"server_ip":     rschema.StringAttribute{Computed: true, Description: "The server's IP address"},
-			"server_name":   rschema.StringAttribute{Optional: true, Description: "Custom name for the server"},
+			"server_ip":     rschema.StringAttribute{Required: true, Description: "The server's IP address"},
+			"server_name":   rschema.StringAttribute{Required: true, Description: "Custom name for the server (used as hostname in autosetup)"},
 			"description":   rschema.StringAttribute{Optional: true, Description: "Custom description for the server"},
 			"vswitch_id":    rschema.Int64Attribute{Optional: true, Description: "ID of the vSwitch to connect the server to"},
 
-			"autosetup_content":    rschema.StringAttribute{Required: true, Sensitive: true, Description: "Autosetup configuration content"},
+			// Autosetup parameters
+			"arch":          rschema.StringAttribute{Required: true, Description: "Architecture for the OS image (arm64 or amd64)"},
+			"cryptpassword": rschema.StringAttribute{Required: true, Sensitive: true, Description: "Password for disk encryption (used in autosetup)"},
+
 			"post_install_content": rschema.StringAttribute{Optional: true, Sensitive: true, Description: "Post-install script content"},
 
-			"ansible_repo":     rschema.StringAttribute{Optional: true, Description: "Ansible repository URL for post-install automation"},
-			"ansible_playbook": rschema.StringAttribute{Optional: true, Computed: true, Description: "Ansible playbook to run (defaults to site.yml)"},
-			"ansible_extra":    rschema.StringAttribute{Optional: true, Computed: true, Description: "Extra Ansible variables"},
-
 			"rescue_authorized_key_fingerprints": rschema.ListAttribute{
-				Optional:    true,
+				Required:    true,
 				ElementType: types.StringType,
 				Description: "SSH key fingerprints for rescue mode access",
-			},
-			"ssh_wait_timeout_minutes": rschema.Int64Attribute{
-				Optional: true, Computed: true, Description: "Timeout waiting for SSH to be available",
 			},
 			"id": rschema.StringAttribute{Computed: true},
 		},
@@ -122,9 +131,6 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 
 	// 5) Wait for SSH
 	waitMin := int64(20)
-	if !plan.SSHWaitMinutes.IsNull() && !plan.SSHWaitMinutes.IsUnknown() && plan.SSHWaitMinutes.ValueInt64() > 0 {
-		waitMin = plan.SSHWaitMinutes.ValueInt64()
-	}
 	if err := waitTCP(ip+":22", time.Duration(waitMin)*time.Minute); err != nil {
 		resp.Diagnostics.AddError("rescue ssh timeout", err.Error())
 		return
@@ -144,28 +150,19 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	}
 	defer closeFn()
 
-	if err := sshx.Upload(conn, "/autosetup", []byte(plan.Autosetup.ValueString()), 0600); err != nil {
+	// Generate autosetup content from parameters
+	serverName := plan.ServerName.ValueString()
+	arch := plan.Arch.ValueString()
+	cryptPassword := plan.CryptPassword.ValueString()
+	
+	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword)
+
+	if err := sshx.Upload(conn, "/autosetup", []byte(autosetupContent), 0600); err != nil {
 		resp.Diagnostics.AddError("upload autosetup", err.Error())
 		return
 	}
 
 	post := plan.PostInstall.ValueString()
-	if post == "" && !plan.AnsibleRepo.IsNull() && plan.AnsibleRepo.ValueString() != "" {
-		play := "site.yml"
-		extra := ""
-		if !plan.AnsiblePlaybook.IsNull() {
-			play = plan.AnsiblePlaybook.ValueString()
-		}
-		if !plan.AnsibleExtra.IsNull() {
-			extra = plan.AnsibleExtra.ValueString()
-		}
-		post = fmt.Sprintf(`#!/usr/bin/env bash
-set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-if command -v apt-get >/dev/null 2>&1; then apt-get update -y && apt-get install -y git ansible || true; fi
-ansible-pull -U %s -i localhost, -e '%s' %s || true
-`, plan.AnsibleRepo.ValueString(), extra, play)
-	}
 	if post != "" {
 		if err := sshx.Upload(conn, "/root/post-install.sh", []byte(post), 0700); err != nil {
 			resp.Diagnostics.AddError("upload post-install", err.Error())
@@ -192,18 +189,19 @@ ansible-pull -U %s -i localhost, -e '%s' %s || true
 
 	state := plan
 	state.ID = types.StringValue(fmt.Sprintf("configuration-%d", time.Now().Unix()))
-	state.ServerIP = types.StringValue(ip)
+	// ServerIP is already set from the plan since it's now required
 	
 	// Add server to vswitch if provided
 	if !plan.VSwitchID.IsNull() && !plan.VSwitchID.IsUnknown() {
-		err := r.providerData.Client.AddServerToVSwitch(int(plan.VSwitchID.ValueInt64()), ip)
+		serverIP := plan.ServerIP.ValueString()
+		err := r.providerData.Client.AddServerToVSwitch(int(plan.VSwitchID.ValueInt64()), serverIP)
 		if err != nil {
 			resp.Diagnostics.AddError("add server to vswitch failed", err.Error())
 			return
 		}
 		tflog.Info(ctx, "added server to vswitch", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
-			"server_ip":     ip,
+			"server_ip":     serverIP,
 			"vswitch_id":    plan.VSwitchID.ValueInt64(),
 		})
 	}
@@ -212,7 +210,7 @@ ansible-pull -U %s -i localhost, -e '%s' %s || true
 	tflog.Info(ctx, "configuration finished", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
 		"server_name":   plan.ServerName.ValueString(),
-		"ip":            ip,
+		"ip":            plan.ServerIP.ValueString(),
 	})
 }
 

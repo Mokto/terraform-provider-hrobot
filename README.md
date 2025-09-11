@@ -69,22 +69,26 @@ server_status  = "in process" or "ready"
 
 #### Configure a server
 
+**Required Parameters:**
+- `server_name`: Name for the server (used as hostname in autosetup)
+- `server_ip`: The server's IP address
+- `server_number`: Robot server number
+- `arch`: Architecture for the OS image - "amd64" or "arm64"
+- `cryptpassword`: Password for disk encryption
+- `rescue_authorized_key_fingerprints`: SSH key fingerprints for rescue mode access
+
+The `autosetup_content` is automatically generated with Ubuntu 24.04 Noble and the specified configuration.
+
 ```hcl
 resource "hrobot_configuration" "web_server" {
   server_number = hrobot_server_order.test.server_number  # Replace with your actual server number
+  server_ip     = "1.2.3.4"  # Replace with your server's IP address
   server_name   = "web-server-01"
   count         = hrobot_server_order.test.status == "ready" ? 1 : 0
 
-  # Autosetup configuration for Ubuntu 22.04
-  autosetup_content = <<-EOT
-  DRIVE1 /dev/sda
-  BOOTLOADER grub
-  PART /boot/efi esp 256M
-  PART /boot ext4 1G
-  PART /     ext4 all crypt
-  IMAGE /root/images/Ubuntu-2404-noble-amd64-base.tar.gz
-  HOSTNAME coucou
-  EOT
+  # Required autosetup parameters
+  arch          = "amd64"  # "amd64" or "arm64"
+  cryptpassword = "your-secure-password"
 
   # Post-install script to configure the server
   post_install_content = <<-EOT
@@ -120,8 +124,6 @@ resource "hrobot_configuration" "web_server" {
     "your-ssh-key-fingerprint-2"
   ]
 
-  # Timeout for SSH connection (in minutes)
-  ssh_wait_timeout_minutes = 30
 }
 ```
 
