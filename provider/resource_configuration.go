@@ -127,6 +127,7 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	err_summary, err := r.configure(fp, ip, plan, ctx)
 	if err_summary != "" {
 		resp.Diagnostics.AddError(err_summary, err)
+		return
 	}
 
 	state := plan
@@ -191,12 +192,35 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 			"server_number": plan.ServerNumber.ValueInt64(),
 			"version":       plan.Version.ValueInt64(),
 		})
-		resp.Diagnostics.AddWarning("Reconfiguration completed", "The server has been reconfigured due to a version change. Note that this does not update the version in the state; please ensure the version is updated in the Terraform configuration if needed.")
+
+		// Update state with the new plan values, preserving ID from current state
+		var currentState configurationModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &currentState)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		state := plan
+		state.ID = currentState.ID // Preserve existing ID
+		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 		return
 	}
 
-	// For other changes, we need to recreate the resource
-	resp.Diagnostics.AddWarning("Update limited", "Only server name and vswitch can be updated. Other changes require recreation (taint/recreate).")
+	// For other changes that don't require reconfiguration, update the state, preserving ID
+	var currentState configurationModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &currentState)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	state := plan
+	state.ID = currentState.ID // Preserve existing ID
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+
+	// Note: Some changes may require recreation (taint/recreate)
+	if resp.Diagnostics.HasError() {
+		resp.Diagnostics.AddWarning("Update limited", "Some changes may require resource recreation (taint/recreate).")
+	}
 }
 
 func (r *configurationResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

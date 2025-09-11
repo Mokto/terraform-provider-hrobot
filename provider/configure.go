@@ -165,56 +165,53 @@ func (r *configurationResource) configure(fp []string, ip string, plan configura
 		"server_ip":     ip,
 	})
 
-	if _, err := sshx.Run(conn, "/root/.oldroot/nfs/install/installimage -a -c /root/setup.conf"); err != nil {
-		return "installimage failed", err.Error()
-	}
+	// if _, err := sshx.Run(conn, "/root/.oldroot/nfs/install/installimage -a -c /root/setup.conf -x /root/post-install.sh"); err != nil {
+	// 	return "installimage failed", err.Error()
+	// }
 
-	// run postinstall
-	tflog.Info(ctx, "starting postinstall", map[string]interface{}{
-		"server_number": plan.ServerNumber.ValueInt64(),
-		"server_ip":     ip,
-	})
-	if _, err := sshx.Run(conn, "/root/post-install.sh"); err != nil {
-		return "post-install script failed", err.Error()
-	}
+	// tflog.Info(ctx, "all completed, rebooting server", map[string]interface{}{
+	// 	"server_number": plan.ServerNumber.ValueInt64(),
+	// 	"server_ip":     ip,
+	// })
 
-	tflog.Info(ctx, "all completed, rebooting server", map[string]interface{}{
-		"server_number": plan.ServerNumber.ValueInt64(),
-		"server_ip":     ip,
-	})
+	// _, err = sshx.Run(conn, "reboot || systemctl reboot || shutdown -r now || true")
+	// if err != nil {
+	// 	tflog.Warn(ctx, "failed to issue reboot command", map[string]interface{}{
+	// 		"server_number": plan.ServerNumber.ValueInt64(),
+	// 		"error":         err.Error(),
+	// 	})
+	// }
 
-	_, _ = sshx.Run(conn, "reboot || systemctl reboot || shutdown -r now || true")
+	// // 8) Wait for OS SSH to come back
+	// tflog.Info(ctx, "waiting for OS to boot after installation", map[string]interface{}{
+	// 	"server_number":   plan.ServerNumber.ValueInt64(),
+	// 	"server_ip":       ip,
+	// 	"timeout_minutes": waitMin,
+	// })
 
-	// 8) Wait for OS SSH to come back
-	tflog.Info(ctx, "waiting for OS to boot after installation", map[string]interface{}{
-		"server_number":   plan.ServerNumber.ValueInt64(),
-		"server_ip":       ip,
-		"timeout_minutes": waitMin,
-	})
+	// if err := waitTCP(ip+":22", time.Duration(waitMin)*time.Minute); err != nil {
+	// 	tflog.Warn(ctx, "initial OS boot timeout, retrying with extended timeout", map[string]interface{}{
+	// 		"server_number": plan.ServerNumber.ValueInt64(),
+	// 		"server_ip":     ip,
+	// 		"error":         err.Error(),
+	// 	})
 
-	if err := waitTCP(ip+":22", time.Duration(waitMin)*time.Minute); err != nil {
-		tflog.Warn(ctx, "initial OS boot timeout, retrying with extended timeout", map[string]interface{}{
-			"server_number": plan.ServerNumber.ValueInt64(),
-			"server_ip":     ip,
-			"error":         err.Error(),
-		})
+	// 	// give a little more
+	// 	if err2 := waitTCP(ip+":22", 15*time.Minute); err2 != nil {
+	// 		return "os ssh timeout", fmt.Sprintf("%v / %v", err, err2)
+	// 	}
+	// }
 
-		// give a little more
-		if err2 := waitTCP(ip+":22", 15*time.Minute); err2 != nil {
-			return "os ssh timeout", fmt.Sprintf("%v / %v", err, err2)
-		}
-	}
+	// tflog.Info(ctx, "OS is now available via SSH", map[string]interface{}{
+	// 	"server_number": plan.ServerNumber.ValueInt64(),
+	// 	"server_ip":     ip,
+	// })
 
-	tflog.Info(ctx, "OS is now available via SSH", map[string]interface{}{
-		"server_number": plan.ServerNumber.ValueInt64(),
-		"server_ip":     ip,
-	})
-
-	tflog.Info(ctx, "configuration finished", map[string]interface{}{
-		"server_number": plan.ServerNumber.ValueInt64(),
-		"server_name":   plan.ServerName.ValueString(),
-		"ip":            plan.ServerIP.ValueString(),
-	})
+	// tflog.Info(ctx, "configuration finished", map[string]interface{}{
+	// 	"server_number": plan.ServerNumber.ValueInt64(),
+	// 	"server_name":   plan.ServerName.ValueString(),
+	// 	"ip":            plan.ServerIP.ValueString(),
+	// })
 
 	return "", ""
 }
