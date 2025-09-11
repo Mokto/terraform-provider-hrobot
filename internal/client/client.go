@@ -174,6 +174,13 @@ func (c *Client) SetServerName(serverNumber int, serverName string) error {
 	return err
 }
 
+func (c *Client) AddServerToVSwitch(vswitchID int, serverIP string) error {
+	f := url.Values{}
+	f.Set("server[]", serverIP)
+	_, err := c.do("POST", fmt.Sprintf("/vswitch/%d/server", vswitchID), f, 200)
+	return err
+}
+
 // --- VSwitch
 
 func (c *Client) CreateVSwitch(vlan int, name string) (*VSwitch, error) {
