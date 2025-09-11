@@ -20,6 +20,7 @@ type configurationModel struct {
 	ServerNumber types.Int64  `tfsdk:"server_number"`
 	ServerIP     types.String `tfsdk:"server_ip"`
 	ServerName   types.String `tfsdk:"server_name"`
+	Description  types.String `tfsdk:"description"`
 
 	Autosetup   types.String `tfsdk:"autosetup_content"`
 	PostInstall types.String `tfsdk:"post_install_content"`
@@ -45,6 +46,7 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 			"server_number": rschema.Int64Attribute{Required: true, Description: "Robot server number"},
 			"server_ip":     rschema.StringAttribute{Computed: true, Description: "The server's IP address"},
 			"server_name":   rschema.StringAttribute{Optional: true, Description: "Custom name for the server"},
+			"description":   rschema.StringAttribute{Optional: true, Description: "Custom description for the server"},
 
 			"autosetup_content":    rschema.StringAttribute{Required: true, Sensitive: true, Description: "Autosetup configuration content"},
 			"post_install_content": rschema.StringAttribute{Optional: true, Sensitive: true, Description: "Post-install script content"},
@@ -188,6 +190,7 @@ ansible-pull -U %s -i localhost, -e '%s' %s || true
 	state := plan
 	state.ID = types.StringValue(fmt.Sprintf("configuration-%d", time.Now().Unix()))
 	state.ServerIP = types.StringValue(ip)
+	
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 	tflog.Info(ctx, "configuration finished", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
@@ -225,6 +228,47 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 }
 
 func (r *configurationResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	// Configuration is a one-shot action, no destructive cleanup needed
-	tflog.Info(ctx, "configuration resource deleted from state")
+	var state configurationModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// If we have a server number, schedule cancellation at the end of billing period
+	if !state.ServerNumber.IsNull() && !state.ServerNumber.IsUnknown() {
+		serverNumber := int(state.ServerNumber.ValueInt64())
+
+		// Schedule cancellation at the end of the billing period (empty cancelDate means end of period)
+		err := r.providerData.Client.CancelServer(serverNumber, "")
+		if err != nil {
+			// Log the error but don't fail the delete operation
+			// The server will be removed from Terraform state regardless
+			tflog.Warn(ctx, "Failed to schedule server cancellation", map[string]interface{}{
+				"server_number": serverNumber,
+				"error":         err.Error(),
+			})
+
+			resp.Diagnostics.AddWarning(
+				"Server Cancellation Failed",
+				fmt.Sprintf("Failed to schedule cancellation for server %d: %s. Please cancel the server manually through the Hetzner Robot interface to stop billing.", serverNumber, err.Error()),
+			)
+		} else {
+			tflog.Info(ctx, "Scheduled server cancellation", map[string]interface{}{
+				"server_number": serverNumber,
+			})
+
+			resp.Diagnostics.AddWarning(
+				"Server Cancellation Scheduled",
+				fmt.Sprintf("Server %d has been scheduled for cancellation at the end of the billing period. The server will remain active until then.", serverNumber),
+			)
+		}
+	} else {
+		// No server number available, just remove from state
+		tflog.Info(ctx, "Removing configuration from state (no server number available)")
+
+		resp.Diagnostics.AddWarning(
+			"Manual Cancellation May Be Required",
+			"The configuration has been removed from Terraform state, but if a server was created, you may need to cancel it manually through the Hetzner Robot interface.",
+		)
+	}
 }

@@ -339,6 +339,7 @@ func (c *Client) GetServerFromBulk(serverNumber int, servers []Server) (*Server,
 	return nil, fmt.Errorf("server %d not found", serverNumber)
 }
 
+
 // --- Simple Cache Manager
 
 type CacheManager struct {

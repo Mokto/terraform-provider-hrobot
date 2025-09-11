@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -65,37 +64,37 @@ func getCacheFilePath() string {
 		// Fallback to temp directory if we can't get working directory
 		return filepath.Join(os.TempDir(), "terraform-provider-hrobot-cache.json")
 	}
-	
+
 	// Create .cache directory if it doesn't exist
 	cacheDir := filepath.Join(wd, ".cache")
 	os.MkdirAll(cacheDir, 0755)
-	
+
 	return filepath.Join(cacheDir, "transaction-cache.json")
 }
 
-func NewResourceServerOrder() resource.Resource { 
+func NewResourceServerOrder() resource.Resource {
 	// Load cache from disk on startup
 	loadCacheFromDisk()
-	return &serverOrderResource{} 
+	return &serverOrderResource{}
 }
 
 // loadCacheFromDisk loads the cache from disk
 func loadCacheFromDisk() {
 	cacheMutex.Lock()
 	defer cacheMutex.Unlock()
-	
+
 	data, err := os.ReadFile(cacheFile)
 	if err != nil {
 		// Cache file doesn't exist or can't be read, start with empty cache
 		return
 	}
-	
+
 	var diskCache map[string]*jsonCacheEntry
 	if err := json.Unmarshal(data, &diskCache); err != nil {
 		// Invalid cache file, start with empty cache
 		return
 	}
-	
+
 	// Only load non-expired entries
 	now := time.Now()
 	for id, jsonEntry := range diskCache {
@@ -103,7 +102,7 @@ func loadCacheFromDisk() {
 		if err != nil {
 			continue // Skip invalid timestamp
 		}
-		
+
 		if now.Sub(lastUpdated) <= cacheExpiry {
 			transactionCache[id] = &transactionCacheEntry{
 				transaction: jsonEntry.Transaction,
@@ -117,7 +116,7 @@ func loadCacheFromDisk() {
 func saveCacheToDisk() {
 	cacheMutex.RLock()
 	defer cacheMutex.RUnlock()
-	
+
 	// Convert to JSON-serializable format
 	jsonCache := make(map[string]*jsonCacheEntry)
 	for id, entry := range transactionCache {
@@ -126,12 +125,12 @@ func saveCacheToDisk() {
 			LastUpdated: entry.lastUpdated.Format(time.RFC3339),
 		}
 	}
-	
+
 	data, err := json.Marshal(jsonCache)
 	if err != nil {
 		return
 	}
-	
+
 	os.WriteFile(cacheFile, data, 0600)
 }
 
@@ -162,7 +161,7 @@ func setCachedTransaction(id string, transaction *client.Transaction) {
 		transaction: transaction,
 		lastUpdated: time.Now(),
 	}
-	
+
 	// Save to disk asynchronously
 	go saveCacheToDisk()
 }
@@ -303,7 +302,7 @@ func (r *serverOrderResource) Read(ctx context.Context, req resource.ReadRequest
 				"transaction_id": transactionID,
 			})
 		}
-		
+
 		tx, err = r.providerData.Client.GetOrderTransaction(transactionID)
 		if client.IsNotFound(err) {
 			resp.State.RemoveResource(ctx)
@@ -345,49 +344,9 @@ func (r *serverOrderResource) Update(ctx context.Context, req resource.UpdateReq
 }
 
 func (r *serverOrderResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state serverOrderModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// If we have a server number, schedule cancellation at the end of billing period
-	if !state.ServerNumber.IsNull() && !state.ServerNumber.IsUnknown() {
-		serverNumber := int(state.ServerNumber.ValueInt64())
-
-		// Schedule cancellation at the end of the billing period (empty cancelDate means end of period)
-		err := r.providerData.Client.CancelServer(serverNumber, "")
-		if err != nil {
-			// Log the error but don't fail the delete operation
-			// The server will be removed from Terraform state regardless
-			tflog.Warn(ctx, "Failed to schedule server cancellation", map[string]interface{}{
-				"server_number": serverNumber,
-				"error":         err.Error(),
-			})
-
-			resp.Diagnostics.AddWarning(
-				"Server Cancellation Failed",
-				fmt.Sprintf("Failed to schedule cancellation for server %d: %s. Please cancel the server manually through the Hetzner Robot interface to stop billing.", serverNumber, err.Error()),
-			)
-		} else {
-			tflog.Info(ctx, "Scheduled server cancellation", map[string]interface{}{
-				"server_number": serverNumber,
-			})
-
-			resp.Diagnostics.AddWarning(
-				"Server Cancellation Scheduled",
-				fmt.Sprintf("Server %d has been scheduled for cancellation at the end of the billing period. The server will remain active until then.", serverNumber),
-			)
-		}
-	} else {
-		// No server number available, just remove from state
-		tflog.Info(ctx, "Removing server order from state (no server number available)")
-
-		resp.Diagnostics.AddWarning(
-			"Manual Cancellation May Be Required",
-			"The server order has been removed from Terraform state, but if a server was created, you may need to cancel it manually through the Hetzner Robot interface.",
-		)
-	}
+	// Server order deletion is handled by the configuration resource
+	// This resource only manages the order transaction, not server lifecycle
+	tflog.Info(ctx, "server order resource deleted from state")
 }
 
 // helpers

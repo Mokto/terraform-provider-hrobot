@@ -1,11 +1,21 @@
 package client
 
+type Product struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description []string `json:"description"`
+	Traffic     string   `json:"traffic"`
+	Location    []string `json:"location"`
+}
+
 type Transaction struct {
-	ID           string `json:"id"`
-	Date         string `json:"date"`
-	Status       string `json:"status"` // "in process" | "ready" | "cancelled"
-	ServerNumber *int   `json:"server_number"`
-	ServerIP     string `json:"server_ip"`
+	ID           string   `json:"id"`
+	Date         string   `json:"date"`
+	Status       string   `json:"status"` // "in process" | "ready" | "cancelled"
+	ServerNumber *int     `json:"server_number"`
+	ServerIP     string   `json:"server_ip"`
+	Product      *Product `json:"product,omitempty"`
+	Addons       []string `json:"addons,omitempty"`
 }
 type transactionEnv struct {
 	Transaction Transaction `json:"transaction"`
