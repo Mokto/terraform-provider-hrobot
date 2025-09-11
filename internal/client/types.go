@@ -1,11 +1,54 @@
 package client
 
+import (
+	"encoding/json"
+)
+
 type Product struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Description []string `json:"description"`
 	Traffic     string   `json:"traffic"`
 	Location    []string `json:"location"`
+}
+
+// UnmarshalJSON custom unmarshaling for Product to handle location as either string or []string
+func (p *Product) UnmarshalJSON(data []byte) error {
+	type Alias Product
+	aux := &struct {
+		Location interface{} `json:"location"`
+		*Alias
+	}{
+		Alias: (*Alias)(p),
+	}
+	
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	
+	// Handle location field - can be string or []string
+	switch v := aux.Location.(type) {
+	case string:
+		if v != "" {
+			p.Location = []string{v}
+		} else {
+			p.Location = []string{}
+		}
+	case []string:
+		p.Location = v
+	case []interface{}:
+		// Handle case where it's an array of mixed types
+		p.Location = make([]string, len(v))
+		for i, item := range v {
+			if str, ok := item.(string); ok {
+				p.Location[i] = str
+			}
+		}
+	default:
+		p.Location = []string{}
+	}
+	
+	return nil
 }
 
 type Transaction struct {

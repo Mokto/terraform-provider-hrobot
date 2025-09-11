@@ -12,12 +12,12 @@ A [Terraform](https://www.terraform.io) / [OpenTofu](https://opentofu.org) provi
 ## Features
 
 - **Order servers** via `hrobot_server_order` resource (returns a transaction id).
-- **Install operating systems** via `hrobot_installimage` resource:
+- **Install operating systems** via `hrobot_configuration` resource:
   - activate Rescue
   - reboot
   - upload an `autosetup` file
   - run `installimage`
-  - optional `post-install` or `ansible-pull`.
+  - automatic LUKS encryption setup with keyfile-based auto-unlock
 
 ---
 
@@ -77,7 +77,7 @@ server_status  = "in process" or "ready"
 - `cryptpassword`: Password for disk encryption
 - `rescue_authorized_key_fingerprints`: SSH key fingerprints for rescue mode access
 
-The `autosetup_content` is automatically generated with Ubuntu 24.04 Noble and the specified configuration.
+The `autosetup_content` is automatically generated with Ubuntu 24.04 Noble and the specified configuration. A comprehensive postinstall script for LUKS encryption setup is automatically included.
 
 ```hcl
 resource "hrobot_configuration" "web_server" {
@@ -89,34 +89,6 @@ resource "hrobot_configuration" "web_server" {
   # Required autosetup parameters
   arch          = "amd64"  # "amd64" or "arm64"
   cryptpassword = "your-secure-password"
-
-  # Post-install script to configure the server
-  post_install_content = <<-EOT
-    #!/bin/bash
-    set -euo pipefail
-
-    # Update the system
-    apt-get update
-    apt-get upgrade -y
-
-    # Install common packages
-    apt-get install -y nginx ufw fail2ban
-
-    # Configure firewall
-    ufw allow ssh
-    ufw allow 'Nginx Full'
-    ufw --force enable
-
-    # Configure fail2ban
-    systemctl enable fail2ban
-    systemctl start fail2ban
-
-    # Start nginx
-    systemctl enable nginx
-    systemctl start nginx
-
-    echo "Server configuration completed successfully!"
-  EOT
 
   # SSH key fingerprints for rescue mode access
   rescue_authorized_key_fingerprints = [

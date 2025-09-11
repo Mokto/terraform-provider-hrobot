@@ -1,5 +1,6 @@
 # Example demonstrating autosetup parameters
-# This shows how to use the new name, arch, and cryptpassword parameters
+# This shows how to use the name, arch, and cryptpassword parameters
+# The postinstall script for LUKS encryption setup is now built-in
 
 terraform {
   required_providers {
@@ -24,24 +25,6 @@ resource "hrobot_configuration" "web_server_amd64" {
   # Required autosetup parameters
   arch          = "amd64"
   cryptpassword = "my-secure-password-123"
-
-  # Optional: Custom post-install script
-  post_install_content = <<-EOT
-    #!/bin/bash
-    set -euo pipefail
-    
-    # Update system
-    apt-get update && apt-get upgrade -y
-    
-    # Install nginx
-    apt-get install -y nginx
-    
-    # Start nginx
-    systemctl enable nginx
-    systemctl start nginx
-    
-    echo "Web server setup completed!"
-  EOT
 
   # SSH key fingerprints for rescue mode access
   rescue_authorized_key_fingerprints = [

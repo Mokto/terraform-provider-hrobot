@@ -177,7 +177,7 @@ func (c *Client) SetServerName(serverNumber int, serverName string) error {
 func (c *Client) AddServerToVSwitch(vswitchID int, serverIP string) error {
 	f := url.Values{}
 	f.Set("server[]", serverIP)
-	_, err := c.do("POST", fmt.Sprintf("/vswitch/%d/server", vswitchID), f, 200)
+	_, err := c.do("POST", fmt.Sprintf("/vswitch/%d/server", vswitchID), f, 200, 201)
 	return err
 }
 
@@ -216,7 +216,7 @@ func (c *Client) CreateVSwitch(vlan int, name string) (*VSwitch, error) {
 		log.Printf("Failed to unmarshal VSwitch response: %v", err)
 		return nil, err
 	}
-	
+
 	log.Printf("Parsed VSwitch wrapped: ID=%d, VLAN=%d, Name='%s'", env.VSwitch.ID, env.VSwitch.VLAN, env.VSwitch.Name)
 	// If the API response doesn't include vlan/name, use the values we sent
 	if env.VSwitch.VLAN == 0 {
@@ -250,7 +250,7 @@ func (c *Client) GetVSwitch(id int) (*VSwitch, error) {
 		log.Printf("Failed to unmarshal VSwitch response: %v", err)
 		return nil, err
 	}
-	
+
 	log.Printf("Parsed VSwitch wrapped: ID=%d, VLAN=%d, Name='%s'", env.VSwitch.ID, env.VSwitch.VLAN, env.VSwitch.Name)
 	return &env.VSwitch, nil
 }
@@ -301,7 +301,7 @@ func (c *Client) UpdateVSwitch(id int, vlan int, name string) (*VSwitch, error) 
 		log.Printf("Failed to unmarshal VSwitch response: %v", err)
 		return nil, err
 	}
-	
+
 	log.Printf("Parsed VSwitch wrapped: ID=%d, VLAN=%d, Name='%s'", env.VSwitch.ID, env.VSwitch.VLAN, env.VSwitch.Name)
 	// If the API response doesn't include vlan/name, use the values we sent
 	if env.VSwitch.VLAN == 0 {
@@ -345,7 +345,6 @@ func (c *Client) GetServerFromBulk(serverNumber int, servers []Server) (*Server,
 
 	return nil, fmt.Errorf("server %d not found", serverNumber)
 }
-
 
 // --- Simple Cache Manager
 
