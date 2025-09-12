@@ -21,6 +21,8 @@ type configurationModel struct {
 	Description  types.String `tfsdk:"description"`
 	VSwitchID    types.Int64  `tfsdk:"vswitch_id"`
 	Version      types.Int64  `tfsdk:"version"`
+	LocalIP      types.String `tfsdk:"local_ip"`
+	RaidLevel    types.Int64  `tfsdk:"raid_level"`
 
 	// Autosetup parameters
 	Arch          types.String `tfsdk:"arch"`
@@ -45,6 +47,8 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 			"description":   rschema.StringAttribute{Optional: true, Description: "Custom description for the server"},
 			"vswitch_id":    rschema.Int64Attribute{Optional: true, Description: "ID of the vSwitch to connect the server to"},
 			"version":       rschema.Int64Attribute{Optional: true, Description: "Version of the node, will trigger rescue + full install on each change"},
+			"local_ip":      rschema.StringAttribute{Optional: true, Description: "Local IP address for private network configuration"},
+			"raid_level":    rschema.Int64Attribute{Optional: true, Description: "RAID level for software RAID configuration (default: 1)"},
 
 			// Autosetup parameters
 			"arch":          rschema.StringAttribute{Required: true, Description: "Architecture for the OS image (arm64 or amd64)"},

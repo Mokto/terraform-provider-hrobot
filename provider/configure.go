@@ -13,19 +13,19 @@ import (
 )
 
 // buildAutosetupContent generates autosetup configuration from parameters
-func buildAutosetupContent(serverName, arch, cryptPassword string) string {
+func buildAutosetupContent(serverName, arch, cryptPassword string, raidLevel int64) string {
 	// Build the autosetup content
 	content := fmt.Sprintf(`CRYPTPASSWORD %s
 DRIVE1 /dev/nvme0n1
 DRIVE2 /dev/nvme1n1
 SWRAID 1
-SWRAIDLEVEL 0
+SWRAIDLEVEL %d
 BOOTLOADER grub
 PART /boot/efi esp 512M
 PART /boot ext4 1G
 PART /     ext4 all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
-HOSTNAME %s`, cryptPassword, arch, serverName)
+HOSTNAME %s`, cryptPassword, raidLevel, arch, serverName)
 
 	return content
 }
@@ -115,13 +115,20 @@ func (r *configurationResource) configure(fp []string, ip string, plan configura
 	arch := plan.Arch.ValueString()
 	cryptPassword := plan.CryptPassword.ValueString()
 
+	// Default raid level to 1 if not specified
+	raidLevel := int64(1)
+	if !plan.RaidLevel.IsNull() && !plan.RaidLevel.IsUnknown() {
+		raidLevel = plan.RaidLevel.ValueInt64()
+	}
+
 	tflog.Info(ctx, "generating autosetup configuration", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
 		"server_name":   serverName,
 		"arch":          arch,
+		"raid_level":    raidLevel,
 	})
 
-	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword)
+	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword, raidLevel)
 
 	tflog.Info(ctx, "uploading autosetup configuration", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
@@ -136,8 +143,15 @@ func (r *configurationResource) configure(fp []string, ip string, plan configura
 		"server_number": plan.ServerNumber.ValueInt64(),
 	})
 
-	// Generate postinstall script with the correct password
+	// Generate postinstall script with the correct password and local IP
 	postinstallContent := strings.ReplaceAll(postinstallScript, "SECRETPASSWORDREPLACEME", cryptPassword)
+
+	// Add local IP configuration if provided
+	localIP := ""
+	if !plan.LocalIP.IsNull() && !plan.LocalIP.IsUnknown() {
+		localIP = plan.LocalIP.ValueString()
+	}
+	postinstallContent = strings.ReplaceAll(postinstallContent, "LOCALIPADDRESSREPLACEME", localIP)
 
 	tflog.Info(ctx, "uploading postinstall script", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
