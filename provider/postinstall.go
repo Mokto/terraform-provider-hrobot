@@ -54,36 +54,17 @@ cryptsetup luksDump "$LUKS_DEVICE" | grep -A10 "Keyslots:" || echo "Failed to sh
 # Add the key with more verbose output and alternative method
 echo "Attempting to add key file..."
 
-# Method 1: Try with stdin
-if echo "$CRYPT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH" --key-file=- --verbose; then
-    echo "Key file successfully added to LUKS device (method 1)"
+TEMP_PASS_FILE=$(mktemp)
+echo "$CRYPT_PASSWORD" > "$TEMP_PASS_FILE"
+chmod 600 "$TEMP_PASS_FILE"
+if cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH" --verbose < "$TEMP_PASS_FILE"; then
+    echo "Key file successfully added to LUKS device (method 3)"
     KEY_ADDED=true
 else
-    echo "Method 1 failed, trying method 2..."
-
-    # Method 2: Try with temporary file
-    TEMP_PASS_FILE=$(mktemp)
-    echo "$CRYPT_PASSWORD" > "$TEMP_PASS_FILE"
-    chmod 600 "$TEMP_PASS_FILE"
-
-    if cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH" --key-file="$TEMP_PASS_FILE" --verbose; then
-        echo "Key file successfully added to LUKS device (method 2)"
-        KEY_ADDED=true
-    else
-        echo "Method 2 also failed, trying method 3..."
-
-        # Method 3: Interactive mode (shouldn't work in automated script, but let's try)
-        if cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH" --verbose < "$TEMP_PASS_FILE"; then
-            echo "Key file successfully added to LUKS device (method 3)"
-            KEY_ADDED=true
-        else
-            KEY_ADDED=false
-        fi
-    fi
-
-    # Clean up temp file
-    rm -f "$TEMP_PASS_FILE"
+    KEY_ADDED=false
 fi
+# Clean up temp file
+rm -f "$TEMP_PASS_FILE"
 
 if [ "$KEY_ADDED" != "true" ]; then
     RESULT=$?
@@ -195,26 +176,46 @@ apt-get update
 apt-get install -y dropbear-initramfs
 
 # Configure dropbear
-mkdir -p /etc/dropbear-initramfs
-echo 'DROPBEAR_OPTIONS="-p 2222 -s -j -k -I 60"' > /etc/dropbear-initramfs/config
+mkdir -p /etc/dropbear/initramfs
+echo 'DROPBEAR_OPTIONS="-p 2222 -s -j -k -I 60 -W 65536"' > /etc/dropbear/initramfs/dropbear.conf
 
-# Copy SSH keys
+# Process SSH keys with dropbear-specific requirements
 if [ -f /root/.ssh/authorized_keys ]; then
-    cp /root/.ssh/authorized_keys /etc/dropbear-initramfs/authorized_keys
-    chmod 600 /etc/dropbear-initramfs/authorized_keys
-    echo "SSH keys copied for dropbear access"
+    echo "Processing SSH keys for dropbear..."
+    cp /root/.ssh/authorized_keys /etc/dropbear/initramfs/authorized_keys
+    chmod 600 /etc/dropbear/initramfs/authorized_keys
+    echo "✓ Successfully processed $VALID_KEYS SSH key(s) for dropbear"
 else
-    echo "Warning: No SSH keys found at /root/.ssh/authorized_keys"
-    echo "Dropbear configured but no SSH keys available for remote access"
+    echo "⚠ No SSH keys found at /root/.ssh/authorized_keys"
 fi
 
-# Update initramfs again to include dropbear
+# Double-check dropbear configuration files
+echo "Finalizing dropbear configuration..."
+
+# Ensure the config file has proper format
+cat > /etc/dropbear/initramfs/dropbear.conf << 'EOF'
+DROPBEAR_OPTIONS="-p 2222 -s -j -k -I 60 -W 65536"
+EOF
+
+# Verify authorized_keys file exists and has content
+if [ -f /etc/dropbear/initramfs/authorized_keys ] && [ -s /etc/dropbear/initramfs/authorized_keys ]; then
+    echo "✓ Dropbear authorized_keys file verified"
+    echo "Key count: $(wc -l < /etc/dropbear/initramfs/authorized_keys)"
+else
+    echo "⚠ ERROR: Dropbear authorized_keys file missing or empty!"
+    exit 1
+fi
+
+# Update initramfs again to include dropbear with fixed configuration
+# Enable DHCP networking in initramfs
+echo 'IP=dhcp' >> /etc/initramfs-tools/initramfs.conf
 echo "Updating initramfs to include dropbear..."
 update-initramfs -u -k all
 
-echo "Dropbear configured. You can SSH to port 2222 during boot if needed."
-echo "Use: ssh -p 2222 root@your-server-ip"
-echo "Then run: cryptroot-unlock"
+echo ""
+echo "🔧 Dropbear configuration complete"
+echo "📡 Emergency SSH access: ssh -p 2222 root@your-server-ip"
+echo "🔓 To unlock manually during boot: cryptroot-unlock"
 
 # Final verification
 echo ""
