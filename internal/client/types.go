@@ -5,7 +5,7 @@ import (
 )
 
 type Product struct {
-	ID          string   `json:"id"`
+	ID          int      `json:"id"`
 	Name        string   `json:"name"`
 	Description []string `json:"description"`
 	Traffic     string   `json:"traffic"`
@@ -21,11 +21,11 @@ func (p *Product) UnmarshalJSON(data []byte) error {
 	}{
 		Alias: (*Alias)(p),
 	}
-	
+
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	
+
 	// Handle location field - can be string or []string
 	switch v := aux.Location.(type) {
 	case string:
@@ -47,7 +47,7 @@ func (p *Product) UnmarshalJSON(data []byte) error {
 	default:
 		p.Location = []string{}
 	}
-	
+
 	return nil
 }
 
@@ -57,11 +57,62 @@ type Transaction struct {
 	Status       string   `json:"status"` // "in process" | "ready" | "cancelled"
 	ServerNumber *int     `json:"server_number"`
 	ServerIP     string   `json:"server_ip"`
-	Product      *Product `json:"product,omitempty"`
+	Product      *Product `json:"-"` // Handle with custom unmarshaling
+	ProductID    int      `json:"-"` // Store product ID when it's an integer
 	Addons       []string `json:"addons,omitempty"`
 }
+
+// UnmarshalJSON custom unmarshaling for Transaction to handle product as either string or object
+func (t *Transaction) UnmarshalJSON(data []byte) error {
+	type Alias Transaction
+	aux := &struct {
+		Product interface{} `json:"product,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(t),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Handle product field - can be integer (product ID) or object (Product struct)
+	switch v := aux.Product.(type) {
+	case float64:
+		// JSON numbers are unmarshaled as float64
+		t.ProductID = int(v)
+		t.Product = nil
+	case int:
+		t.ProductID = v
+		t.Product = nil
+	case map[string]interface{}:
+		// Convert back to JSON and unmarshal as Product
+		productJSON, err := json.Marshal(v)
+		if err == nil {
+			var product Product
+			if err := json.Unmarshal(productJSON, &product); err == nil {
+				t.Product = &product
+				t.ProductID = product.ID
+			}
+		}
+	case nil:
+		t.Product = nil
+		t.ProductID = 0
+	}
+
+	return nil
+}
+
 type transactionEnv struct {
 	Transaction Transaction `json:"transaction"`
+}
+
+type productEnv struct {
+	Product Product `json:"product"`
+}
+
+type productListEnv struct {
+	Products []Product `json:"product"`
 }
 
 type Rescue struct {

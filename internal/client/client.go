@@ -108,6 +108,81 @@ func (c *Client) OrderServer(p OrderParams) (*Transaction, error) {
 	return &env.Transaction, nil
 }
 
+// --- Market/Auction Order
+
+type MarketOrderParams struct {
+	ProductID      int
+	Dist, Password *string
+	Keys, Addons   []string
+	Test           bool
+}
+
+func (c *Client) OrderMarketServer(p MarketOrderParams) (*Transaction, error) {
+	f := url.Values{}
+	f.Set("product_id", fmt.Sprintf("%d", p.ProductID))
+	if p.Dist != nil {
+		f.Set("dist", *p.Dist)
+	}
+	if p.Password != nil {
+		f.Set("password", *p.Password)
+	}
+	for _, k := range p.Keys {
+		f.Add("authorized_key[]", k)
+	}
+	for _, a := range p.Addons {
+		f.Add("addon[]", a)
+	}
+	if p.Test {
+		f.Set("test", "true")
+	}
+
+	b, err := c.do("POST", "/order/server_market/transaction", f, 201, 200)
+	if err != nil {
+		return nil, err
+	}
+	var env transactionEnv
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	return &env.Transaction, nil
+}
+
+func (c *Client) GetMarketOrderTransaction(id string) (*Transaction, error) {
+	b, err := c.do("GET", "/order/server_market/transaction/"+url.PathEscape(id), nil, 200)
+	if err != nil {
+		return nil, err
+	}
+	var env transactionEnv
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	return &env.Transaction, nil
+}
+
+func (c *Client) ListMarketProducts() ([]Product, error) {
+	b, err := c.do("GET", "/order/server_market/product", nil, 200)
+	if err != nil {
+		return nil, err
+	}
+	var env productListEnv
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	return env.Products, nil
+}
+
+func (c *Client) GetMarketProduct(productID string) (*Product, error) {
+	b, err := c.do("GET", "/order/server_market/product/"+url.PathEscape(productID), nil, 200)
+	if err != nil {
+		return nil, err
+	}
+	var env productEnv
+	if err := json.Unmarshal(b, &env); err != nil {
+		return nil, err
+	}
+	return &env.Product, nil
+}
+
 func (c *Client) GetOrderTransaction(id string) (*Transaction, error) {
 	b, err := c.do("GET", "/order/server/transaction/"+url.PathEscape(id), nil, 200)
 	if err != nil {

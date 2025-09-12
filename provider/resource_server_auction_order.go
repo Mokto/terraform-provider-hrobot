@@ -16,15 +16,14 @@ import (
 	"github.com/mokto/terraform-provider-hrobot/internal/client"
 )
 
-type serverOrderResource struct {
+type serverAuctionOrderResource struct {
 	providerData *ProviderData
 }
 
-type serverOrderModel struct {
+type serverAuctionOrderModel struct {
 	ID        types.String `tfsdk:"id"`
-	ProductID types.String `tfsdk:"product_id"`
+	ProductID types.Int64  `tfsdk:"product_id"`
 	Dist      types.String `tfsdk:"dist"`
-	Location  types.String `tfsdk:"location"`
 	Keys      types.List   `tfsdk:"authorized_key_fingerprints"`
 	Password  types.String `tfsdk:"password"`
 	Addons    types.List   `tfsdk:"addons"`
@@ -36,60 +35,60 @@ type serverOrderModel struct {
 	ServerIP      types.String `tfsdk:"server_ip"`
 }
 
-// Cache entry for transaction data
-type transactionCacheEntry struct {
+// Cache entry for market transaction data
+type marketTransactionCacheEntry struct {
 	transaction *client.Transaction
 	lastUpdated time.Time
 }
 
-// JSON-serializable cache entry
-type jsonCacheEntry struct {
+// JSON-serializable cache entry for market transactions
+type jsonMarketCacheEntry struct {
 	Transaction *client.Transaction `json:"transaction"`
 	LastUpdated string              `json:"last_updated"`
 }
 
-// Global cache for transaction data to avoid hitting API rate limits
+// Global cache for market transaction data to avoid hitting API rate limits
 var (
-	transactionCache = make(map[string]*transactionCacheEntry)
-	cacheMutex       sync.RWMutex
-	cacheExpiry      = 5 * time.Minute // Cache expires after 5 minutes
-	cacheFile        = getCacheFilePath()
+	marketTransactionCache = make(map[string]*marketTransactionCacheEntry)
+	marketCacheMutex       sync.RWMutex
+	marketCacheExpiry      = 5 * time.Minute // Cache expires after 5 minutes
+	marketCacheFile        = getMarketCacheFilePath()
 )
 
-// getCacheFilePath returns the path to the cache file in the .cache directory
-func getCacheFilePath() string {
+// getMarketCacheFilePath returns the path to the market cache file in the .cache directory
+func getMarketCacheFilePath() string {
 	// Get the current working directory (should be the repository root)
 	wd, err := os.Getwd()
 	if err != nil {
 		// Fallback to temp directory if we can't get working directory
-		return filepath.Join(os.TempDir(), "terraform-provider-hrobot-cache.json")
+		return filepath.Join(os.TempDir(), "terraform-provider-hrobot-market-cache.json")
 	}
 
 	// Create .cache directory if it doesn't exist
 	cacheDir := filepath.Join(wd, ".cache")
 	os.MkdirAll(cacheDir, 0755)
 
-	return filepath.Join(cacheDir, "transaction-cache.json")
+	return filepath.Join(cacheDir, "market-transaction-cache.json")
 }
 
-func NewResourceServerOrder() resource.Resource {
+func NewResourceServerAuctionOrder() resource.Resource {
 	// Load cache from disk on startup
-	loadCacheFromDisk()
-	return &serverOrderResource{}
+	loadMarketCacheFromDisk()
+	return &serverAuctionOrderResource{}
 }
 
-// loadCacheFromDisk loads the cache from disk
-func loadCacheFromDisk() {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
+// loadMarketCacheFromDisk loads the market cache from disk
+func loadMarketCacheFromDisk() {
+	marketCacheMutex.Lock()
+	defer marketCacheMutex.Unlock()
 
-	data, err := os.ReadFile(cacheFile)
+	data, err := os.ReadFile(marketCacheFile)
 	if err != nil {
 		// Cache file doesn't exist or can't be read, start with empty cache
 		return
 	}
 
-	var diskCache map[string]*jsonCacheEntry
+	var diskCache map[string]*jsonMarketCacheEntry
 	if err := json.Unmarshal(data, &diskCache); err != nil {
 		// Invalid cache file, start with empty cache
 		return
@@ -103,8 +102,8 @@ func loadCacheFromDisk() {
 			continue // Skip invalid timestamp
 		}
 
-		if now.Sub(lastUpdated) <= cacheExpiry {
-			transactionCache[id] = &transactionCacheEntry{
+		if now.Sub(lastUpdated) <= marketCacheExpiry {
+			marketTransactionCache[id] = &marketTransactionCacheEntry{
 				transaction: jsonEntry.Transaction,
 				lastUpdated: lastUpdated,
 			}
@@ -112,15 +111,15 @@ func loadCacheFromDisk() {
 	}
 }
 
-// saveCacheToDisk saves the cache to disk
-func saveCacheToDisk() {
-	cacheMutex.RLock()
-	defer cacheMutex.RUnlock()
+// saveMarketCacheToDisk saves the market cache to disk
+func saveMarketCacheToDisk() {
+	marketCacheMutex.RLock()
+	defer marketCacheMutex.RUnlock()
 
 	// Convert to JSON-serializable format
-	jsonCache := make(map[string]*jsonCacheEntry)
-	for id, entry := range transactionCache {
-		jsonCache[id] = &jsonCacheEntry{
+	jsonCache := make(map[string]*jsonMarketCacheEntry)
+	for id, entry := range marketTransactionCache {
+		jsonCache[id] = &jsonMarketCacheEntry{
 			Transaction: entry.transaction,
 			LastUpdated: entry.lastUpdated.Format(time.RFC3339),
 		}
@@ -131,43 +130,43 @@ func saveCacheToDisk() {
 		return
 	}
 
-	os.WriteFile(cacheFile, data, 0600)
+	os.WriteFile(marketCacheFile, data, 0600)
 }
 
-// getCachedTransaction retrieves transaction from cache if available and not expired
-func getCachedTransaction(id string) (*client.Transaction, bool) {
-	cacheMutex.RLock()
-	defer cacheMutex.RUnlock()
+// getCachedMarketTransaction retrieves market transaction from cache if available and not expired
+func getCachedMarketTransaction(id string) (*client.Transaction, bool) {
+	marketCacheMutex.RLock()
+	defer marketCacheMutex.RUnlock()
 
-	entry, exists := transactionCache[id]
+	entry, exists := marketTransactionCache[id]
 	if !exists {
 		return nil, false
 	}
 
 	// Check if cache entry is expired
-	if time.Since(entry.lastUpdated) > cacheExpiry {
+	if time.Since(entry.lastUpdated) > marketCacheExpiry {
 		return nil, false
 	}
 
 	return entry.transaction, true
 }
 
-// setCachedTransaction stores transaction in cache
-func setCachedTransaction(id string, transaction *client.Transaction) {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
+// setCachedMarketTransaction stores market transaction in cache
+func setCachedMarketTransaction(id string, transaction *client.Transaction) {
+	marketCacheMutex.Lock()
+	defer marketCacheMutex.Unlock()
 
-	transactionCache[id] = &transactionCacheEntry{
+	marketTransactionCache[id] = &marketTransactionCacheEntry{
 		transaction: transaction,
 		lastUpdated: time.Now(),
 	}
 
 	// Save to disk asynchronously
-	go saveCacheToDisk()
+	go saveMarketCacheToDisk()
 }
 
-// shouldRefreshTransaction determines if we need to refresh the transaction data
-func shouldRefreshTransaction(transaction *client.Transaction) bool {
+// shouldRefreshMarketTransaction determines if we need to refresh the market transaction data
+func shouldRefreshMarketTransaction(transaction *client.Transaction) bool {
 	if transaction == nil {
 		return true
 	}
@@ -175,17 +174,16 @@ func shouldRefreshTransaction(transaction *client.Transaction) bool {
 	return transaction.Status == "in process"
 }
 
-func (r *serverOrderResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_server_order"
+func (r *serverAuctionOrderResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_server_auction_order"
 }
 
-func (r *serverOrderResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *serverAuctionOrderResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = rschema.Schema{
-		Description: "Manages a Hetzner Robot server order. When destroyed, the server will be scheduled for cancellation at the end of the billing period.",
+		Description: "Manages a Hetzner Robot server auction order. Orders servers from the auction/market at discounted prices. When destroyed, the server will be scheduled for cancellation at the end of the billing period.",
 		Attributes: map[string]rschema.Attribute{
-			"product_id": rschema.Int64Attribute{Required: true, Description: "Robot product id (e.g., 1234)"},
+			"product_id": rschema.Int64Attribute{Required: true, Description: "Auction product id (e.g., 12345)"},
 			"dist":       rschema.StringAttribute{Optional: true, Description: "Preinstall distribution label"},
-			"location":   rschema.StringAttribute{Optional: true, Description: "FSN1 / NBG1 / HEL1"},
 			"authorized_key_fingerprints": rschema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
@@ -210,37 +208,34 @@ func (r *serverOrderResource) Schema(_ context.Context, _ resource.SchemaRequest
 	}
 }
 
-func (r *serverOrderResource) Configure(_ context.Context, req resource.ConfigureRequest, _ *resource.ConfigureResponse) {
+func (r *serverAuctionOrderResource) Configure(_ context.Context, req resource.ConfigureRequest, _ *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
 	r.providerData = req.ProviderData.(*ProviderData)
 }
 
-func (r *serverOrderResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan serverOrderModel
+func (r *serverAuctionOrderResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan serverAuctionOrderModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	keys := mustStringSliceCreate(ctx, resp, plan.Keys)
-	addons := mustStringSliceCreate(ctx, resp, plan.Addons)
+	keys := mustStringSliceCreateAuction(ctx, resp, plan.Keys)
+	addons := mustStringSliceCreateAuction(ctx, resp, plan.Addons)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	tx, err := r.providerData.Client.OrderServer(client.OrderParams{
-		ProductID: plan.ProductID.ValueString(),
-		Dist:      optString(plan.Dist),
-		Location:  optString(plan.Location),
-		Password:  optString(plan.Password),
+	tx, err := r.providerData.Client.OrderMarketServer(client.MarketOrderParams{
+		ProductID: int(plan.ProductID.ValueInt64()),
 		Keys:      keys,
 		Addons:    addons,
 		Test:      !plan.Test.IsNull() && plan.Test.ValueBool(),
 	})
 	if err != nil {
-		resp.Diagnostics.AddError("order failed", err.Error())
+		resp.Diagnostics.AddError("auction order failed", err.Error())
 		return
 	}
 
@@ -256,14 +251,14 @@ func (r *serverOrderResource) Create(ctx context.Context, req resource.CreateReq
 	state.ServerIP = types.StringValue(tx.ServerIP)
 
 	// Cache the transaction data
-	setCachedTransaction(tx.ID, tx)
+	setCachedMarketTransaction(tx.ID, tx)
 
-	tflog.Info(ctx, "created order", map[string]interface{}{"transaction_id": tx.ID})
+	tflog.Info(ctx, "created auction order", map[string]interface{}{"transaction_id": tx.ID})
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *serverOrderResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state serverOrderModel
+func (r *serverAuctionOrderResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state serverAuctionOrderModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -277,45 +272,45 @@ func (r *serverOrderResource) Read(ctx context.Context, req resource.ReadRequest
 	transactionID := state.ID.ValueString()
 
 	// Try to get cached transaction first
-	cachedTx, found := getCachedTransaction(transactionID)
+	cachedTx, found := getCachedMarketTransaction(transactionID)
 
 	var tx *client.Transaction
 	var err error
 
 	// Determine if we need to refresh the data
-	if found && !shouldRefreshTransaction(cachedTx) {
+	if found && !shouldRefreshMarketTransaction(cachedTx) {
 		// Use cached data - transaction is in final state
 		tx = cachedTx
-		tflog.Info(ctx, "Using cached transaction data", map[string]interface{}{
+		tflog.Info(ctx, "Using cached market transaction data", map[string]interface{}{
 			"transaction_id": transactionID,
 			"status":         tx.Status,
 		})
 	} else {
 		// Make API call to get fresh data
 		if found {
-			tflog.Info(ctx, "Refreshing transaction data (status is in process)", map[string]interface{}{
+			tflog.Info(ctx, "Refreshing market transaction data (status is in process)", map[string]interface{}{
 				"transaction_id": transactionID,
 				"cached_status":  cachedTx.Status,
 			})
 		} else {
-			tflog.Info(ctx, "No cached data found, fetching transaction", map[string]interface{}{
+			tflog.Info(ctx, "No cached data found, fetching market transaction", map[string]interface{}{
 				"transaction_id": transactionID,
 			})
 		}
 
-		tx, err = r.providerData.Client.GetOrderTransaction(transactionID)
+		tx, err = r.providerData.Client.GetMarketOrderTransaction(transactionID)
 		if client.IsNotFound(err) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
 		if err != nil {
-			resp.Diagnostics.AddError("read transaction", err.Error())
+			resp.Diagnostics.AddError("read market transaction", err.Error())
 			return
 		}
 
 		// Update cache with fresh data
-		setCachedTransaction(transactionID, tx)
-		tflog.Info(ctx, "Updated transaction cache", map[string]interface{}{
+		setCachedMarketTransaction(transactionID, tx)
+		tflog.Info(ctx, "Updated market transaction cache", map[string]interface{}{
 			"transaction_id": transactionID,
 			"status":         tx.Status,
 		})
@@ -332,25 +327,25 @@ func (r *serverOrderResource) Read(ctx context.Context, req resource.ReadRequest
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *serverOrderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *serverAuctionOrderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	// immutable; re-create on changes
-	var plan serverOrderModel
+	var plan serverAuctionOrderModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.AddAttributeError(
 		path.Root("product_id"),
 		"Update Not Supported",
-		"Order is immutable; destroy and re-create if needed.",
+		"Auction order is immutable; destroy and re-create if needed.",
 	)
 }
 
-func (r *serverOrderResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	// Server order deletion is handled by the configuration resource
+func (r *serverAuctionOrderResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	// Server auction order deletion is handled by the configuration resource
 	// This resource only manages the order transaction, not server lifecycle
-	tflog.Info(ctx, "server order resource deleted from state")
+	tflog.Info(ctx, "server auction order resource deleted from state")
 }
 
-// helpers
-func mustStringSliceCreate(ctx context.Context, resp *resource.CreateResponse, l types.List) []string {
+// helpers for auction orders
+func mustStringSliceCreateAuction(ctx context.Context, resp *resource.CreateResponse, l types.List) []string {
 	if l.IsNull() || l.IsUnknown() {
 		return nil
 	}
@@ -358,15 +353,8 @@ func mustStringSliceCreate(ctx context.Context, resp *resource.CreateResponse, l
 	resp.Diagnostics.Append(l.ElementsAs(ctx, &out, false)...)
 	return out
 }
-func mustStringSliceUpdate(ctx context.Context, resp *resource.UpdateResponse, l types.List) []string {
-	if l.IsNull() || l.IsUnknown() {
-		return nil
-	}
-	var out []string
-	resp.Diagnostics.Append(l.ElementsAs(ctx, &out, false)...)
-	return out
-}
-func optString(v types.String) *string {
+
+func optStringAuction(v types.String) *string {
 	if v.IsNull() || v.IsUnknown() {
 		return nil
 	}

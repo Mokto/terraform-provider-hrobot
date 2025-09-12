@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/mokto/terraform-provider-hrobot/internal/client"
 
+	"github.com/mokto/terraform-provider-hrobot/internal/client"
 	sshx "github.com/mokto/terraform-provider-hrobot/internal/ssh"
 )
 
@@ -31,7 +31,28 @@ HOSTNAME %s`, cryptPassword, raidLevel, arch, serverName)
 }
 
 func (r *configurationResource) configure(fp []string, ip string, plan configurationModel, ctx context.Context) (string, string) {
-	// 3) Activate Rescue
+
+	summary, error := r.preInstall(fp, ip, plan, ctx)
+	if error != "" {
+		return summary, error
+	}
+
+	summary, error = r.postInstallFirstRun(fp, ip, plan, ctx)
+	if error != "" {
+		return summary, error
+	}
+
+	tflog.Info(ctx, "configuration finished", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_name":   plan.ServerName.ValueString(),
+		"ip":            plan.ServerIP.ValueString(),
+	})
+
+	return "", ""
+}
+
+func (r *configurationResource) preInstall(fp []string, ip string, plan configurationModel, ctx context.Context) (string, string) {
+
 	tflog.Info(ctx, "activating rescue mode", map[string]interface{}{
 		"server_number":         plan.ServerNumber.ValueInt64(),
 		"authorized_keys_count": len(fp),
@@ -63,7 +84,6 @@ func (r *configurationResource) configure(fp []string, ip string, plan configura
 		"server_number": plan.ServerNumber.ValueInt64(),
 	})
 
-	// 5) Wait for SSH
 	waitMin := int64(20)
 	tflog.Info(ctx, "waiting for SSH to become available", map[string]interface{}{
 		"server_number":   plan.ServerNumber.ValueInt64(),
@@ -81,15 +101,9 @@ func (r *configurationResource) configure(fp []string, ip string, plan configura
 	})
 
 	// 6) SSH/SFTP upload
-	authMethod := "key"
-	if len(fp) == 0 {
-		authMethod = "password"
-	}
-
 	tflog.Info(ctx, "establishing SSH connection", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
 		"server_ip":     ip,
-		"auth_method":   authMethod,
 	})
 
 	var auth sshx.Auth
@@ -145,13 +159,6 @@ func (r *configurationResource) configure(fp []string, ip string, plan configura
 
 	// Generate postinstall script with the correct password and local IP
 	postinstallContent := strings.ReplaceAll(postinstallScript, "SECRETPASSWORDREPLACEME", cryptPassword)
-
-	// Add local IP configuration if provided
-	localIP := ""
-	if !plan.LocalIP.IsNull() && !plan.LocalIP.IsUnknown() {
-		localIP = plan.LocalIP.ValueString()
-	}
-	postinstallContent = strings.ReplaceAll(postinstallContent, "LOCALIPADDRESSREPLACEME", localIP)
 
 	tflog.Info(ctx, "uploading postinstall script", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
@@ -221,11 +228,56 @@ func (r *configurationResource) configure(fp []string, ip string, plan configura
 		"server_ip":     ip,
 	})
 
-	tflog.Info(ctx, "configuration finished", map[string]interface{}{
+	return "", ""
+}
+
+func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan configurationModel, ctx context.Context) (string, string) {
+
+	tflog.Info(ctx, "establishing SSH connection", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
-		"server_name":   plan.ServerName.ValueString(),
-		"ip":            plan.ServerIP.ValueString(),
+		"server_ip":     ip,
 	})
+
+	var auth sshx.Auth
+	if len(fp) > 0 {
+		tflog.Info(ctx, "establishing SSH connection with agent")
+		auth = sshx.AuthFromAgent()
+	} else {
+		return "no ssh keys", "At least one rescue_authorized_key_fingerprint is required for SSH access"
+	}
+	conn, closeFn2, err := sshx.Connect(sshx.Conn{Host: ip, User: "root", Timeout: 3 * time.Minute, Auth: auth, InsecureIgnoreHostKey: true})
+	if err != nil {
+		return "ssh connect", err.Error()
+	}
+	defer closeFn2()
+
+	tflog.Info(ctx, "SSH connection established", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_ip":     ip,
+	})
+
+	// Add local IP configuration if provided
+	localIP := ""
+	if !plan.LocalIP.IsNull() && !plan.LocalIP.IsUnknown() {
+		localIP = plan.LocalIP.ValueString()
+	}
+	postinstallFirstRunContent := strings.ReplaceAll(postinstallFirstRunScript, "LOCALIPADDRESSREPLACEME", localIP)
+
+	tflog.Info(ctx, "uploading postinstall - first run script", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"script_size":   len(postinstallFirstRunContent),
+	})
+
+	if err := sshx.Upload(conn, "/root/initialize.sh", []byte(postinstallFirstRunContent), 0700); err != nil {
+		return "upload initialize", err.Error()
+	}
+
+	if _, err := sshx.Run(conn, "chmod +x /root/initialize.sh && /root/initialize.sh"); err != nil {
+		tflog.Warn(ctx, "failed to run script permissions", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"error":         err.Error(),
+		})
+	}
 
 	return "", ""
 }

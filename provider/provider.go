@@ -106,6 +106,7 @@ func (p *hrobotProvider) Configure(ctx context.Context, req provider.ConfigureRe
 func (p *hrobotProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewResourceServerOrder,
+		NewResourceServerAuctionOrder,
 		NewResourceConfiguration,
 		NewResourceVSwitch,
 	}
