@@ -13,11 +13,11 @@ import (
 )
 
 // buildAutosetupContent generates autosetup configuration from parameters
-func buildAutosetupContent(serverName, arch, cryptPassword string, raidLevel int64) string {
+func buildAutosetupContent(serverName, arch, cryptPassword string, raidLevel int64, drive1, drive2 string) string {
 	// Build the autosetup content
 	content := fmt.Sprintf(`CRYPTPASSWORD %s
-DRIVE1 /dev/nvme0n1
-DRIVE2 /dev/nvme1n1
+DRIVE1 %s
+DRIVE2 %s
 SWRAID 1
 SWRAIDLEVEL %d
 BOOTLOADER grub
@@ -25,7 +25,7 @@ PART /boot/efi esp 512M
 PART /boot ext4 1G
 PART /     ext4 all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
-HOSTNAME %s`, cryptPassword, raidLevel, arch, serverName)
+HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, arch, serverName)
 
 	return content
 }
@@ -124,6 +124,43 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		"server_ip":     ip,
 	})
 
+	// Detect available disks
+	tflog.Info(ctx, "detecting available disks", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+	})
+
+	diskOutput, err := sshx.Run(conn, "lsblk -d -o NAME,SIZE,TYPE | grep disk")
+	if err != nil {
+		return "disk detection failed", fmt.Sprintf("Failed to detect disks: %v", err)
+	}
+
+	// Parse disk output to get exactly 2 disks
+	diskLines := strings.Split(strings.TrimSpace(diskOutput), "\n")
+	if len(diskLines) != 2 {
+		return "invalid disk count", fmt.Sprintf("Expected exactly 2 disks, found %d disks: %s", len(diskLines), diskOutput)
+	}
+
+	// Extract disk names (first field of each line)
+	var drive1, drive2 string
+	for i, line := range diskLines {
+		fields := strings.Fields(line)
+		if len(fields) < 1 {
+			return "disk parsing error", fmt.Sprintf("Could not parse disk line: %s", line)
+		}
+		diskName := "/dev/" + fields[0]
+		if i == 0 {
+			drive1 = diskName
+		} else {
+			drive2 = diskName
+		}
+	}
+
+	tflog.Info(ctx, "detected disks", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"drive1":        drive1,
+		"drive2":        drive2,
+	})
+
 	// Generate autosetup content from parameters
 	serverName := plan.ServerName.ValueString()
 	arch := plan.Arch.ValueString()
@@ -142,7 +179,7 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		"raid_level":    raidLevel,
 	})
 
-	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword, raidLevel)
+	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword, raidLevel, drive1, drive2)
 
 	tflog.Info(ctx, "uploading autosetup configuration", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
