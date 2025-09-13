@@ -100,4 +100,5 @@ else
     echo "CPU frequency scaling not available or not supported on this system"
 fi
 
+# EXTRASCRIPTREPLACEME
 `

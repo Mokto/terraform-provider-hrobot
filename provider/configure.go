@@ -262,7 +262,15 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 	if !plan.LocalIP.IsNull() && !plan.LocalIP.IsUnknown() {
 		localIP = plan.LocalIP.ValueString()
 	}
+
+	// Add extra script commands if provided
+	extraScript := ""
+	if !plan.ExtraScript.IsNull() && !plan.ExtraScript.IsUnknown() {
+		extraScript = plan.ExtraScript.ValueString()
+	}
+
 	postinstallFirstRunContent := strings.ReplaceAll(postinstallFirstRunScript, "LOCALIPADDRESSREPLACEME", localIP)
+	postinstallFirstRunContent = strings.ReplaceAll(postinstallFirstRunContent, "# EXTRASCRIPTREPLACEME", extraScript)
 
 	tflog.Info(ctx, "uploading postinstall - first run script", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),

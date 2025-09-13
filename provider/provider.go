@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -22,6 +24,8 @@ type hrobotProvider struct {
 type ProviderData struct {
 	Client       *client.Client
 	CacheManager *client.CacheManager
+	UsedIPs      map[string]bool // Track assigned private IPs (10.1.0.x)
+	IPMutex      sync.Mutex      // Protect IP assignment from race conditions
 }
 
 func New(version string) func() provider.Provider {
@@ -96,6 +100,7 @@ func (p *hrobotProvider) Configure(ctx context.Context, req provider.ConfigureRe
 	providerData := &ProviderData{
 		Client:       c,
 		CacheManager: cacheManager,
+		UsedIPs:      make(map[string]bool),
 	}
 
 	tflog.Info(ctx, "Configured hrobot provider", map[string]interface{}{"base_url": base})
@@ -116,4 +121,28 @@ func (p *hrobotProvider) DataSources(_ context.Context) []func() datasource.Data
 	return []func() datasource.DataSource{
 		NewDataServers,
 	}
+}
+
+// GetNextAvailableIP assigns the next available IP in the range 10.1.0.2 to 10.1.0.127
+func (pd *ProviderData) GetNextAvailableIP() (string, error) {
+	pd.IPMutex.Lock()
+	defer pd.IPMutex.Unlock()
+
+	// Range: 10.1.0.2 to 10.1.0.127
+	for i := 2; i <= 127; i++ {
+		ip := fmt.Sprintf("10.1.0.%d", i)
+		if !pd.UsedIPs[ip] {
+			pd.UsedIPs[ip] = true
+			return ip, nil
+		}
+	}
+
+	return "", fmt.Errorf("no available IP addresses in range 10.1.0.2-10.1.0.127")
+}
+
+// ReleaseIP marks an IP as available for reuse
+func (pd *ProviderData) ReleaseIP(ip string) {
+	pd.IPMutex.Lock()
+	defer pd.IPMutex.Unlock()
+	delete(pd.UsedIPs, ip)
 }

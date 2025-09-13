@@ -18,15 +18,17 @@ type configurationModel struct {
 	ServerNumber types.Int64  `tfsdk:"server_number"`
 	ServerIP     types.String `tfsdk:"server_ip"`
 	ServerName   types.String `tfsdk:"server_name"`
+	RobotName    types.String `tfsdk:"robot_name"`
 	Description  types.String `tfsdk:"description"`
 	VSwitchID    types.Int64  `tfsdk:"vswitch_id"`
 	Version      types.Int64  `tfsdk:"version"`
-	LocalIP      types.String `tfsdk:"local_ip"`
+	LocalIP      types.String `tfsdk:"local_ip"` // Now computed, automatically assigned
 	RaidLevel    types.Int64  `tfsdk:"raid_level"`
 
 	// Autosetup parameters
 	Arch          types.String `tfsdk:"arch"`
 	CryptPassword types.String `tfsdk:"cryptpassword"`
+	ExtraScript   types.String `tfsdk:"extra_script"`
 
 	RescueKeyFPs types.List `tfsdk:"rescue_authorized_key_fingerprints"`
 }
@@ -44,15 +46,17 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 			"server_number": rschema.Int64Attribute{Required: true, Description: "Robot server number"},
 			"server_ip":     rschema.StringAttribute{Required: true, Description: "The server's IP address"},
 			"server_name":   rschema.StringAttribute{Required: true, Description: "Custom name for the server (used as hostname in autosetup)"},
+			"robot_name":    rschema.StringAttribute{Optional: true, Description: "Custom name for the server in Hetzner Robot interface (if not set, uses server_name)"},
 			"description":   rschema.StringAttribute{Optional: true, Description: "Custom description for the server"},
 			"vswitch_id":    rschema.Int64Attribute{Optional: true, Description: "ID of the vSwitch to connect the server to"},
 			"version":       rschema.Int64Attribute{Optional: true, Description: "Version of the node, will trigger rescue + full install on each change"},
-			"local_ip":      rschema.StringAttribute{Optional: true, Description: "Local IP address for private network configuration"},
+			"local_ip":      rschema.StringAttribute{Computed: true, Description: "Automatically assigned local IP address for private network configuration (10.1.0.2-10.1.0.127)"},
 			"raid_level":    rschema.Int64Attribute{Optional: true, Description: "RAID level for software RAID configuration (default: 1)"},
 
 			// Autosetup parameters
 			"arch":          rschema.StringAttribute{Required: true, Description: "Architecture for the OS image (arm64 or amd64)"},
 			"cryptpassword": rschema.StringAttribute{Required: true, Sensitive: true, Description: "Password for disk encryption (used in autosetup)"},
+			"extra_script":  rschema.StringAttribute{Optional: true, Description: "Additional shell commands to run at the end of the postinstall first-run script"},
 
 			"rescue_authorized_key_fingerprints": rschema.ListAttribute{
 				Required:    true,
@@ -85,21 +89,40 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 
 	ip := plan.ServerIP.ValueString()
 
-	// 1) Set server name if provided
-	if !plan.ServerName.IsNull() && !plan.ServerName.IsUnknown() && plan.ServerName.ValueString() != "" {
-		tflog.Info(ctx, "setting server name", map[string]interface{}{
+	// Automatically assign a private IP
+	localIP, err := r.providerData.GetNextAvailableIP()
+	if err != nil {
+		resp.Diagnostics.AddError("IP assignment failed", err.Error())
+		return
+	}
+	plan.LocalIP = types.StringValue(localIP)
+
+	tflog.Info(ctx, "assigned private IP", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"local_ip":      localIP,
+	})
+
+	// 1) Set server name if provided (use robot_name if set, otherwise use server_name)
+	robotName := plan.ServerName.ValueString() // Default to server_name
+	if !plan.RobotName.IsNull() && !plan.RobotName.IsUnknown() && plan.RobotName.ValueString() != "" {
+		robotName = plan.RobotName.ValueString()
+	}
+
+	if robotName != "" {
+		tflog.Info(ctx, "setting server name in Robot interface", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
+			"robot_name":    robotName,
 			"server_name":   plan.ServerName.ValueString(),
 		})
 
-		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.ServerName.ValueString())
+		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), robotName)
 		if err != nil {
 			resp.Diagnostics.AddError("set server name failed", err.Error())
 			return
 		}
-		tflog.Info(ctx, "server name set successfully", map[string]interface{}{
+		tflog.Info(ctx, "server name set successfully in Robot interface", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
-			"server_name":   plan.ServerName.ValueString(),
+			"robot_name":    robotName,
 		})
 	}
 	//
@@ -128,9 +151,9 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 	}
 
 	// Configure
-	err_summary, err := r.configure(fp, ip, plan, ctx)
+	err_summary, err_detail := r.configure(fp, ip, plan, ctx)
 	if err_summary != "" {
-		resp.Diagnostics.AddError(err_summary, err)
+		resp.Diagnostics.AddError(err_summary, err_detail)
 		return
 	}
 
@@ -150,15 +173,21 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 		return
 	}
 
-	// Check if server name changed and update it
-	if !plan.ServerName.IsNull() && !plan.ServerName.IsUnknown() && plan.ServerName.ValueString() != "" {
-		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.ServerName.ValueString())
+	// Check if server name or robot name changed and update it
+	robotName := plan.ServerName.ValueString() // Default to server_name
+	if !plan.RobotName.IsNull() && !plan.RobotName.IsUnknown() && plan.RobotName.ValueString() != "" {
+		robotName = plan.RobotName.ValueString()
+	}
+
+	if robotName != "" {
+		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), robotName)
 		if err != nil {
 			resp.Diagnostics.AddError("update server name failed", err.Error())
 			return
 		}
-		tflog.Info(ctx, "updated server name", map[string]interface{}{
+		tflog.Info(ctx, "updated server name in Robot interface", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
+			"robot_name":    robotName,
 			"server_name":   plan.ServerName.ValueString(),
 		})
 	}
@@ -187,9 +216,29 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 	}
 
 	if !plan.Version.IsNull() && !plan.Version.IsUnknown() {
-		summary, err := r.configure(mustStringSliceUpdate(ctx, resp, plan.RescueKeyFPs), plan.ServerIP.ValueString(), plan, ctx)
-		if err != "" {
-			resp.Diagnostics.AddError(summary, err)
+		// Get current state to preserve or release IP
+		var versionCurrentState configurationModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &versionCurrentState)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Preserve the existing IP assignment for version changes
+		if !versionCurrentState.LocalIP.IsNull() && !versionCurrentState.LocalIP.IsUnknown() && versionCurrentState.LocalIP.ValueString() != "" {
+			plan.LocalIP = versionCurrentState.LocalIP
+		} else {
+			// Assign new IP if none exists
+			localIP, ipErr := r.providerData.GetNextAvailableIP()
+			if ipErr != nil {
+				resp.Diagnostics.AddError("IP assignment failed", ipErr.Error())
+				return
+			}
+			plan.LocalIP = types.StringValue(localIP)
+		}
+
+		summary, err_detail := r.configure(mustStringSliceUpdate(ctx, resp, plan.RescueKeyFPs), plan.ServerIP.ValueString(), plan, ctx)
+		if summary != "" {
+			resp.Diagnostics.AddError(summary, err_detail)
 			return
 		}
 		tflog.Info(ctx, "reconfigured server due to version change", map[string]interface{}{
@@ -198,14 +247,14 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 		})
 
 		// Update state with the new plan values, preserving ID from current state
-		var currentState configurationModel
-		resp.Diagnostics.Append(req.State.Get(ctx, &currentState)...)
+		var versionUpdateState configurationModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &versionUpdateState)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
 
 		state := plan
-		state.ID = currentState.ID // Preserve existing ID
+		state.ID = versionUpdateState.ID // Preserve existing ID
 		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 		return
 	}
@@ -232,6 +281,15 @@ func (r *configurationResource) Delete(ctx context.Context, req resource.DeleteR
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	// Release the private IP if one was assigned
+	if !state.LocalIP.IsNull() && !state.LocalIP.IsUnknown() && state.LocalIP.ValueString() != "" {
+		r.providerData.ReleaseIP(state.LocalIP.ValueString())
+		tflog.Info(ctx, "released private IP", map[string]interface{}{
+			"server_number": state.ServerNumber.ValueInt64(),
+			"local_ip":      state.LocalIP.ValueString(),
+		})
 	}
 
 	// If we have a server number, schedule cancellation at the end of billing period
