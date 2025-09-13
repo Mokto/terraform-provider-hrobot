@@ -210,6 +210,7 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		"timeout_minutes": waitMin,
 	})
 
+	time.Sleep(10 * time.Second)
 	if err := waitTCP(ip+":22", time.Duration(waitMin)*time.Minute); err != nil {
 		tflog.Warn(ctx, "initial OS boot timeout, retrying with extended timeout", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
