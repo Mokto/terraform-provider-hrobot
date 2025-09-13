@@ -173,6 +173,16 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 		return
 	}
 
+	// Preserve local_ip from current state - it should never change once assigned
+	var currentState configurationModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &currentState)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if !currentState.LocalIP.IsNull() && !currentState.LocalIP.IsUnknown() {
+		plan.LocalIP = currentState.LocalIP
+	}
+
 	// Check if server name or robot name changed and update it
 	robotName := plan.ServerName.ValueString() // Default to server_name
 	if !plan.RobotName.IsNull() && !plan.RobotName.IsUnknown() && plan.RobotName.ValueString() != "" {
@@ -260,12 +270,6 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 	}
 
 	// For other changes that don't require reconfiguration, update the state, preserving ID
-	var currentState configurationModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &currentState)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
 	state := plan
 	state.ID = currentState.ID // Preserve existing ID
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
