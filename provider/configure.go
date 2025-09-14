@@ -84,7 +84,7 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		"server_number": plan.ServerNumber.ValueInt64(),
 	})
 
-	waitMin := int64(20)
+	waitMin := int64(5)
 	tflog.Info(ctx, "waiting for SSH to become available", map[string]interface{}{
 		"server_number":   plan.ServerNumber.ValueInt64(),
 		"server_ip":       ip,
