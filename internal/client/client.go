@@ -286,7 +286,7 @@ func (c *Client) AddServerToVSwitch(vswitchID int, serverIP string) error {
 		f.Set("server[]", serverIP)
 		_, err := c.do("POST", fmt.Sprintf("/vswitch/%d/server", vswitchID), f, 200, 201)
 		return err
-	}, 10, 10*time.Second) // Retry up to 5 times with 10-second delays
+	}, 50, 10*time.Second) // Retry up to 50 times with 10-second delays
 }
 
 // --- VSwitch
