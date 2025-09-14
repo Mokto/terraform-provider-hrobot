@@ -13,9 +13,22 @@ import (
 )
 
 // buildAutosetupContent generates autosetup configuration from parameters
-func buildAutosetupContent(serverName, arch, cryptPassword string, raidLevel int64, drive1, drive2 string) string {
+func buildAutosetupContent(serverName, arch, cryptPassword string, raidLevel int64, drive1, drive2 string, noUEFI bool) string {
 	// Build the autosetup content
-	content := fmt.Sprintf(`CRYPTPASSWORD %s
+	var content string
+	if noUEFI {
+		content = fmt.Sprintf(`CRYPTPASSWORD %s
+DRIVE1 %s
+DRIVE2 %s
+SWRAID 1
+SWRAIDLEVEL %d
+BOOTLOADER grub
+PART /boot ext4 1G
+PART /     ext4 all crypt
+IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
+HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, arch, serverName)
+	} else {
+		content = fmt.Sprintf(`CRYPTPASSWORD %s
 DRIVE1 %s
 DRIVE2 %s
 SWRAID 1
@@ -26,6 +39,7 @@ PART /boot ext4 1G
 PART /     ext4 all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
 HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, arch, serverName)
+	}
 
 	return content
 }
@@ -179,7 +193,13 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		"raid_level":    raidLevel,
 	})
 
-	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword, raidLevel, drive1, drive2)
+	// Check no_uefi parameter
+	noUEFI := false
+	if !plan.NoUEFI.IsNull() && !plan.NoUEFI.IsUnknown() {
+		noUEFI = plan.NoUEFI.ValueBool()
+	}
+
+	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword, raidLevel, drive1, drive2, noUEFI)
 
 	tflog.Info(ctx, "uploading autosetup configuration", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),

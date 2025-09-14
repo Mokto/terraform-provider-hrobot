@@ -29,6 +29,7 @@ type configurationModel struct {
 	Arch          types.String `tfsdk:"arch"`
 	CryptPassword types.String `tfsdk:"cryptpassword"`
 	ExtraScript   types.String `tfsdk:"extra_script"`
+	NoUEFI        types.Bool   `tfsdk:"no_uefi"`
 
 	RescueKeyFPs types.List `tfsdk:"rescue_authorized_key_fingerprints"`
 }
@@ -57,6 +58,7 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 			"arch":          rschema.StringAttribute{Required: true, Description: "Architecture for the OS image (arm64 or amd64)"},
 			"cryptpassword": rschema.StringAttribute{Required: true, Sensitive: true, Description: "Password for disk encryption (used in autosetup)"},
 			"extra_script":  rschema.StringAttribute{Optional: true, Description: "Additional shell commands to run at the end of the postinstall first-run script"},
+			"no_uefi":       rschema.BoolAttribute{Optional: true, Description: "If true, removes the UEFI boot partition from the disk partitioning scheme"},
 
 			"rescue_authorized_key_fingerprints": rschema.ListAttribute{
 				Required:    true,
