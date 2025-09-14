@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Client struct {
@@ -64,6 +65,36 @@ func (c *Client) do(method, path string, form url.Values, oks ...int) ([]byte, e
 		return nil, fmt.Errorf("robot: unexpected %d: %s", resp.StatusCode, string(b))
 	}
 	return b, nil
+}
+
+// retryVSwitchOperation retries an operation that might fail with VSWITCH_IN_PROCESS error
+func (c *Client) retryVSwitchOperation(operation func() error, maxAttempts int, delay time.Duration) error {
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := operation()
+		if err == nil {
+			return nil
+		}
+
+		// Check if this is a VSWITCH_IN_PROCESS error
+		if strings.Contains(strings.ToUpper(err.Error()), "VSWITCH_IN_PROCESS") {
+			if attempt == maxAttempts {
+				log.Printf("vSwitch operation failed after %d attempts with VSWITCH_IN_PROCESS error: %v", maxAttempts, err)
+				return fmt.Errorf("vSwitch operation failed after %d attempts due to processing conflict: %w", maxAttempts, err)
+			}
+
+			log.Printf("vSwitch operation attempt %d failed with VSWITCH_IN_PROCESS, retrying in %v...", attempt, delay)
+			time.Sleep(delay)
+			lastErr = err
+			continue
+		}
+
+		// For any other error, don't retry
+		return err
+	}
+
+	return lastErr
 }
 
 // --- Order
@@ -250,10 +281,12 @@ func (c *Client) SetServerName(serverNumber int, serverName string) error {
 }
 
 func (c *Client) AddServerToVSwitch(vswitchID int, serverIP string) error {
-	f := url.Values{}
-	f.Set("server[]", serverIP)
-	_, err := c.do("POST", fmt.Sprintf("/vswitch/%d/server", vswitchID), f, 200, 201)
-	return err
+	return c.retryVSwitchOperation(func() error {
+		f := url.Values{}
+		f.Set("server[]", serverIP)
+		_, err := c.do("POST", fmt.Sprintf("/vswitch/%d/server", vswitchID), f, 200, 201)
+		return err
+	}, 10, 10*time.Second) // Retry up to 5 times with 10-second delays
 }
 
 // --- VSwitch
