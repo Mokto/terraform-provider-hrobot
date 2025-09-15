@@ -11,6 +11,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
+type nodeLabelModel struct {
+	Name  types.String `tfsdk:"name"`
+	Value types.String `tfsdk:"value"`
+}
+
 type configurationResource struct{ providerData *ProviderData }
 
 type configurationModel struct {
@@ -28,8 +33,13 @@ type configurationModel struct {
 	// Autosetup parameters
 	Arch          types.String `tfsdk:"arch"`
 	CryptPassword types.String `tfsdk:"cryptpassword"`
-	ExtraScript   types.String `tfsdk:"extra_script"`
 	NoUEFI        types.Bool   `tfsdk:"no_uefi"`
+
+	// K3S parameters
+	K3SToken   types.String `tfsdk:"k3s_token"`
+	K3SURL     types.String `tfsdk:"k3s_url"`
+	NodeLabels types.List   `tfsdk:"node_labels"`
+	Taints     types.List   `tfsdk:"taints"`
 
 	RescueKeyFPs types.List `tfsdk:"rescue_authorized_key_fingerprints"`
 }
@@ -57,8 +67,26 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 			// Autosetup parameters
 			"arch":          rschema.StringAttribute{Required: true, Description: "Architecture for the OS image (arm64 or amd64)"},
 			"cryptpassword": rschema.StringAttribute{Required: true, Sensitive: true, Description: "Password for disk encryption (used in autosetup)"},
-			"extra_script":  rschema.StringAttribute{Optional: true, Description: "Additional shell commands to run at the end of the postinstall first-run script"},
 			"no_uefi":       rschema.BoolAttribute{Optional: true, Description: "If true, removes the UEFI boot partition from the disk partitioning scheme"},
+
+			// K3S parameters
+			"k3s_token": rschema.StringAttribute{Required: true, Sensitive: true, Description: "K3S token for joining the cluster"},
+			"k3s_url":   rschema.StringAttribute{Required: true, Description: "K3S server URL (e.g., https://master-ip:6443)"},
+			"node_labels": rschema.ListNestedAttribute{
+				Optional:    true,
+				Description: "List of node labels to apply to this K3S node",
+				NestedObject: rschema.NestedAttributeObject{
+					Attributes: map[string]rschema.Attribute{
+						"name":  rschema.StringAttribute{Required: true, Description: "Label name"},
+						"value": rschema.StringAttribute{Required: true, Description: "Label value"},
+					},
+				},
+			},
+			"taints": rschema.ListAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "List of taints to apply to this K3S node (e.g., 'localstorage=true:NoSchedule')",
+			},
 
 			"rescue_authorized_key_fingerprints": rschema.ListAttribute{
 				Required:    true,
@@ -302,30 +330,8 @@ func (r *configurationResource) Delete(ctx context.Context, req resource.DeleteR
 	if !state.ServerNumber.IsNull() && !state.ServerNumber.IsUnknown() {
 		serverNumber := int(state.ServerNumber.ValueInt64())
 
-		// Schedule cancellation at the end of the billing period (empty cancelDate means end of period)
-		err := r.providerData.Client.CancelServer(serverNumber, "")
-		if err != nil {
-			// Log the error but don't fail the delete operation
-			// The server will be removed from Terraform state regardless
-			tflog.Warn(ctx, "Failed to schedule server cancellation", map[string]interface{}{
-				"server_number": serverNumber,
-				"error":         err.Error(),
-			})
+		r.providerData.Client.SetServerName(serverNumber, "cancelled")
 
-			resp.Diagnostics.AddWarning(
-				"Server Cancellation Failed",
-				fmt.Sprintf("Failed to schedule cancellation for server %d: %s. Please cancel the server manually through the Hetzner Robot interface to stop billing.", serverNumber, err.Error()),
-			)
-		} else {
-			tflog.Info(ctx, "Scheduled server cancellation", map[string]interface{}{
-				"server_number": serverNumber,
-			})
-
-			resp.Diagnostics.AddWarning(
-				"Server Cancellation Scheduled",
-				fmt.Sprintf("Server %d has been scheduled for cancellation at the end of the billing period. The server will remain active until then.", serverNumber),
-			)
-		}
 	} else {
 		// No server number available, just remove from state
 		tflog.Info(ctx, "Removing configuration from state (no server number available)")

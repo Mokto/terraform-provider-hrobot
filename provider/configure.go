@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/mokto/terraform-provider-hrobot/internal/client"
@@ -42,6 +43,67 @@ HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, arch, serverName)
 	}
 
 	return content
+}
+
+// buildK3SScript generates K3S installation script from parameters
+func buildK3SScript(plan configurationModel, ctx context.Context) string {
+	if plan.K3SToken.IsNull() || plan.K3SToken.IsUnknown() || plan.K3SURL.IsNull() || plan.K3SURL.IsUnknown() {
+		tflog.Warn(ctx, "K3S parameters not provided, skipping K3S installation")
+		return "echo 'K3S parameters not provided, skipping K3S installation'"
+	}
+
+	k3sToken := plan.K3SToken.ValueString()
+	k3sURL := plan.K3SURL.ValueString()
+
+	var script strings.Builder
+	script.WriteString("echo 'Installing K3S agent...'\n")
+
+	// Build kubelet arguments
+	var kubeletArgs []string
+	kubeletArgs = append(kubeletArgs, fmt.Sprintf("--kubelet-arg=\"provider-id=external://%s\"", plan.ServerName.ValueString()))
+	kubeletArgs = append(kubeletArgs, "--with-node-id")
+	// kubeletArgs = append(kubeletArgs, "--kubelet-arg=node-annotations=cluster-autoscaler.kubernetes.io/scale-down-disabled=true")
+
+	// Add node labels
+	if !plan.NodeLabels.IsNull() && !plan.NodeLabels.IsUnknown() {
+		var nodeLabels []nodeLabelModel
+		plan.NodeLabels.ElementsAs(ctx, &nodeLabels, false)
+		for _, label := range nodeLabels {
+			if !label.Name.IsNull() && !label.Value.IsNull() {
+				kubeletArgs = append(kubeletArgs, fmt.Sprintf("--node-label %s=%s", label.Name.ValueString(), label.Value.ValueString()))
+			}
+		}
+	}
+
+	// Add taints
+	if !plan.Taints.IsNull() && !plan.Taints.IsUnknown() {
+		var taints []types.String
+		plan.Taints.ElementsAs(ctx, &taints, false)
+		for _, taint := range taints {
+			if !taint.IsNull() && !taint.IsUnknown() {
+				kubeletArgs = append(kubeletArgs, fmt.Sprintf("--kubelet-arg=register-with-taints=%s", taint.ValueString()))
+			}
+		}
+	}
+
+	// Build the complete K3S installation command
+	script.WriteString(fmt.Sprintf("curl -sfL https://get.k3s.io | K3S_URL=\"%s\" K3S_TOKEN=%s \\\n", k3sURL, k3sToken))
+	script.WriteString("  sh -s - \\\n")
+
+	// Add all kubelet arguments
+	for _, arg := range kubeletArgs {
+		script.WriteString(fmt.Sprintf("  %s \\\n", arg))
+	}
+
+	// Remove the trailing backslash and newline from the last argument
+	scriptStr := script.String()
+	if strings.HasSuffix(scriptStr, " \\\n") {
+		scriptStr = strings.TrimSuffix(scriptStr, " \\\n") + "\n"
+	}
+
+	scriptStr += "echo 'K3S installation completed'\n"
+
+	return scriptStr
 }
 
 func (r *configurationResource) configure(fp []string, ip string, plan configurationModel, ctx context.Context) (string, string) {
@@ -320,14 +382,11 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 		localIP = plan.LocalIP.ValueString()
 	}
 
-	// Add extra script commands if provided
-	extraScript := ""
-	if !plan.ExtraScript.IsNull() && !plan.ExtraScript.IsUnknown() {
-		extraScript = plan.ExtraScript.ValueString()
-	}
+	// Build K3S installation script
+	k3sScript := buildK3SScript(plan, ctx)
 
 	postinstallFirstRunContent := strings.ReplaceAll(postinstallFirstRunScript, "LOCALIPADDRESSREPLACEME", localIP)
-	postinstallFirstRunContent = strings.ReplaceAll(postinstallFirstRunContent, "# EXTRASCRIPTREPLACEME", extraScript)
+	postinstallFirstRunContent = strings.ReplaceAll(postinstallFirstRunContent, "# EXTRASCRIPTREPLACEME", k3sScript)
 
 	tflog.Info(ctx, "uploading postinstall - first run script", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),

@@ -8,7 +8,8 @@ const postinstallScript = `#!/bin/bash
 set -e
 
 CRYPT_PASSWORD="SECRETPASSWORDREPLACEME"
-LUKS_DEVICE="/dev/md2"  # Fixed: md2 is the encrypted device
+BIGGEST_MD=$(awk '/^md[0-9]+ : active/ {print $1, $5}' /proc/mdstat | sort -k2 -nr | head -1 | cut -d' ' -f1)
+LUKS_DEVICE="/dev/$BIGGEST_MD"
 KEYFILE_PATH="/etc/luks-keys/boot.key"
 KEYFILE_DIR="/etc/luks-keys"
 

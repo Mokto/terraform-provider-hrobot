@@ -183,7 +183,7 @@ func (r *serverOrderResource) Schema(_ context.Context, _ resource.SchemaRequest
 	resp.Schema = rschema.Schema{
 		Description: "Manages a Hetzner Robot server order. When destroyed, the server will be scheduled for cancellation at the end of the billing period.",
 		Attributes: map[string]rschema.Attribute{
-			"product_id": rschema.Int64Attribute{Required: true, Description: "Robot product id (e.g., 1234)"},
+			"product_id": rschema.StringAttribute{Required: true, Description: "Robot product id (e.g., 1234)"},
 			"dist":       rschema.StringAttribute{Optional: true, Description: "Preinstall distribution label"},
 			"location":   rschema.StringAttribute{Optional: true, Description: "FSN1 / NBG1 / HEL1"},
 			"authorized_key_fingerprints": rschema.ListAttribute{
