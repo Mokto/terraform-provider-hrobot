@@ -1,0 +1,5 @@
+2025-09-15T10:42:51.239+0200 [INFO]  OpenTofu version: 1.10.6
+2025-09-15T10:42:51.240+0200 [INFO]  Go runtime version: go1.25.0
+2025-09-15T10:42:51.240+0200 [INFO]  CLI args: []string{"tofu", "state", "list"}
+2025-09-15T10:42:51.240+0200 [INFO]  Loading CLI configuration from /Users/theo/.tofurc
+2025-09-15T10:42:51.242+0200 [INFO]  CLI command args: []string{"state", "list"}

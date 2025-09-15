@@ -2,8 +2,11 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -97,10 +100,13 @@ func (p *hrobotProvider) Configure(ctx context.Context, req provider.ConfigureRe
 	c := client.New(base, username, password, httpClient)
 	cacheManager := client.NewCacheManager()
 
+	// Initialize UsedIPs by scanning the current Terraform state
+	usedIPs := scanStateForUsedIPs(ctx)
+
 	providerData := &ProviderData{
 		Client:       c,
 		CacheManager: cacheManager,
-		UsedIPs:      make(map[string]bool),
+		UsedIPs:      usedIPs,
 	}
 
 	tflog.Info(ctx, "Configured hrobot provider", map[string]interface{}{"base_url": base})
@@ -145,4 +151,81 @@ func (pd *ProviderData) ReleaseIP(ip string) {
 	pd.IPMutex.Lock()
 	defer pd.IPMutex.Unlock()
 	delete(pd.UsedIPs, ip)
+}
+
+// scanStateForUsedIPs scans the current Terraform state to find already assigned IPs
+func scanStateForUsedIPs(ctx context.Context) map[string]bool {
+	usedIPs := make(map[string]bool)
+
+	// Try to get state using tofu or terraform
+	var cmd *exec.Cmd
+	if _, err := exec.LookPath("tofu"); err == nil {
+		cmd = exec.Command("tofu", "state", "pull")
+	} else if _, err := exec.LookPath("terraform"); err == nil {
+		cmd = exec.Command("terraform", "state", "pull")
+	} else {
+		tflog.Warn(ctx, "Neither tofu nor terraform command found, cannot scan state for used IPs")
+		return usedIPs
+	}
+
+	output, err := cmd.Output()
+	if err != nil {
+		tflog.Warn(ctx, "Failed to read Terraform state", map[string]interface{}{"error": err.Error()})
+		return usedIPs
+	}
+
+	// Parse the state JSON
+	var state map[string]interface{}
+	if err := json.Unmarshal(output, &state); err != nil {
+		tflog.Warn(ctx, "Failed to parse Terraform state JSON", map[string]interface{}{"error": err.Error()})
+		return usedIPs
+	}
+
+	// Extract resources from state
+	resources, ok := state["resources"].([]interface{})
+	if !ok {
+		tflog.Debug(ctx, "No resources found in state")
+		return usedIPs
+	}
+
+	// Look for hrobot_configuration resources and extract local_ip values
+	for _, resource := range resources {
+		res, ok := resource.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		resourceType, ok := res["type"].(string)
+		if !ok || resourceType != "hrobot_configuration" {
+			continue
+		}
+
+		instances, ok := res["instances"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, instance := range instances {
+			inst, ok := instance.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			attributes, ok := inst["attributes"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			if localIP, ok := attributes["local_ip"].(string); ok && localIP != "" {
+				// Validate it's in our range
+				if strings.HasPrefix(localIP, "10.1.0.") {
+					usedIPs[localIP] = true
+					tflog.Debug(ctx, "Found used IP in state", map[string]interface{}{"ip": localIP})
+				}
+			}
+		}
+	}
+
+	tflog.Info(ctx, "Scanned state for used IPs", map[string]interface{}{"count": len(usedIPs), "ips": usedIPs})
+	return usedIPs
 }
