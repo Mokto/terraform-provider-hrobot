@@ -60,7 +60,7 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 
 	// Build kubelet arguments
 	var kubeletArgs []string
-	kubeletArgs = append(kubeletArgs, fmt.Sprintf("--kubelet-arg=\"provider-id=external://%s\"", plan.ServerName.ValueString()))
+	kubeletArgs = append(kubeletArgs, fmt.Sprintf("--kubelet-arg=\"provider-id=hrobot://%s\"", plan.ServerName.ValueString()))
 	kubeletArgs = append(kubeletArgs, "--with-node-id")
 	// kubeletArgs = append(kubeletArgs, "--kubelet-arg=node-annotations=cluster-autoscaler.kubernetes.io/scale-down-disabled=true")
 
