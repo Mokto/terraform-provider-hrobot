@@ -39,7 +39,7 @@ func (d *serversDataSource) Schema(_ context.Context, _ datasource.SchemaRequest
 		Description: "Fetches all servers from Hetzner Robot using bulk API call for efficiency.",
 		Attributes: map[string]dschema.Attribute{
 			"servers": dschema.ListNestedAttribute{
-				Computed: true,
+				Computed:    true,
 				Description: "List of all servers",
 				NestedObject: dschema.NestedAttributeObject{
 					Attributes: map[string]dschema.Attribute{

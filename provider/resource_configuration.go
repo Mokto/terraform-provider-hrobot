@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -22,6 +24,7 @@ type configurationModel struct {
 	ID           types.String `tfsdk:"id"`
 	ServerNumber types.Int64  `tfsdk:"server_number"`
 	ServerIP     types.String `tfsdk:"server_ip"`
+	Name         types.String `tfsdk:"name"`
 	ServerName   types.String `tfsdk:"server_name"`
 	RobotName    types.String `tfsdk:"robot_name"`
 	Description  types.String `tfsdk:"description"`
@@ -44,6 +47,25 @@ type configurationModel struct {
 	RescueKeyFPs types.List `tfsdk:"rescue_authorized_key_fingerprints"`
 }
 
+// generateNameHash generates a 6-character alphanumeric hash based on name, server number, and version
+func generateNameHash(name string, serverNumber int64, version int64) (string, error) {
+	// Generate random bytes
+	bytes := make([]byte, 3) // 3 bytes = 6 hex characters
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+
+	// The hash changes only on creation and version changes (random generation)
+	hash := hex.EncodeToString(bytes)
+	return hash, nil
+}
+
+// computeNames generates server_name and robot_name from base name and hash
+func computeNames(name string, hash string) (string, string) {
+	computedName := fmt.Sprintf("%s-%s", name, hash)
+	return computedName, computedName
+}
+
 func NewResourceConfiguration() resource.Resource { return &configurationResource{} }
 
 func (r *configurationResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -56,8 +78,9 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 		Attributes: map[string]rschema.Attribute{
 			"server_number": rschema.Int64Attribute{Required: true, Description: "Robot server number"},
 			"server_ip":     rschema.StringAttribute{Required: true, Description: "The server's IP address"},
-			"server_name":   rschema.StringAttribute{Required: true, Description: "Custom name for the server (used as hostname in autosetup)"},
-			"robot_name":    rschema.StringAttribute{Optional: true, Description: "Custom name for the server in Hetzner Robot interface (if not set, uses server_name)"},
+			"name":          rschema.StringAttribute{Required: true, Description: "Base name for the server (server_name and robot_name will be computed as name-{6-char-id})"},
+			"server_name":   rschema.StringAttribute{Computed: true, Description: "Computed server name in format: name-{6-char-id} (used as hostname in autosetup)"},
+			"robot_name":    rschema.StringAttribute{Computed: true, Description: "Computed robot name in format: name-{6-char-id} (used in Hetzner Robot interface)"},
 			"description":   rschema.StringAttribute{Optional: true, Description: "Custom description for the server"},
 			"vswitch_id":    rschema.Int64Attribute{Optional: true, Description: "ID of the vSwitch to connect the server to"},
 			"version":       rschema.Int64Attribute{Optional: true, Description: "Version of the node, will trigger rescue + full install on each change"},
@@ -119,6 +142,23 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 
 	ip := plan.ServerIP.ValueString()
 
+	// Generate hash for computed names
+	version := int64(1) // Default version for new resources
+	if !plan.Version.IsNull() && !plan.Version.IsUnknown() {
+		version = plan.Version.ValueInt64()
+	}
+
+	nameHash, err := generateNameHash(plan.Name.ValueString(), plan.ServerNumber.ValueInt64(), version)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to generate name hash", err.Error())
+		return
+	}
+
+	// Compute server_name and robot_name
+	serverName, robotName := computeNames(plan.Name.ValueString(), nameHash)
+	plan.ServerName = types.StringValue(serverName)
+	plan.RobotName = types.StringValue(robotName)
+
 	// Automatically assign a private IP
 	localIP, err := r.providerData.GetNextAvailableIP()
 	if err != nil {
@@ -132,29 +172,22 @@ func (r *configurationResource) Create(ctx context.Context, req resource.CreateR
 		"local_ip":      localIP,
 	})
 
-	// 1) Set server name if provided (use robot_name if set, otherwise use server_name)
-	robotName := plan.ServerName.ValueString() // Default to server_name
-	if !plan.RobotName.IsNull() && !plan.RobotName.IsUnknown() && plan.RobotName.ValueString() != "" {
-		robotName = plan.RobotName.ValueString()
-	}
+	// Set computed robot name in Hetzner Robot interface
+	tflog.Info(ctx, "setting computed server name in Robot interface", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"robot_name":    plan.RobotName.ValueString(),
+		"server_name":   plan.ServerName.ValueString(),
+	})
 
-	if robotName != "" {
-		tflog.Info(ctx, "setting server name in Robot interface", map[string]interface{}{
-			"server_number": plan.ServerNumber.ValueInt64(),
-			"robot_name":    robotName,
-			"server_name":   plan.ServerName.ValueString(),
-		})
-
-		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), robotName)
-		if err != nil {
-			resp.Diagnostics.AddError("set server name failed", err.Error())
-			return
-		}
-		tflog.Info(ctx, "server name set successfully in Robot interface", map[string]interface{}{
-			"server_number": plan.ServerNumber.ValueInt64(),
-			"robot_name":    robotName,
-		})
+	err = r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.RobotName.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("set server name failed", err.Error())
+		return
 	}
+	tflog.Info(ctx, "computed server name set successfully in Robot interface", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"robot_name":    plan.RobotName.ValueString(),
+	})
 	//
 	//
 	// Add server to vswitch if provided
@@ -203,31 +236,56 @@ func (r *configurationResource) Update(ctx context.Context, req resource.UpdateR
 		return
 	}
 
-	// Preserve local_ip from current state - it should never change once assigned
+	// Get current state to check for changes
 	var currentState configurationModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &currentState)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// Preserve local_ip from current state - it should never change once assigned
 	if !currentState.LocalIP.IsNull() && !currentState.LocalIP.IsUnknown() {
 		plan.LocalIP = currentState.LocalIP
 	}
 
-	// Check if server name or robot name changed and update it
-	robotName := plan.ServerName.ValueString() // Default to server_name
-	if !plan.RobotName.IsNull() && !plan.RobotName.IsUnknown() && plan.RobotName.ValueString() != "" {
-		robotName = plan.RobotName.ValueString()
+	// Check if name or version changed - if so, regenerate the hash and names
+	nameChanged := !currentState.Name.IsNull() && plan.Name.ValueString() != currentState.Name.ValueString()
+	versionChanged := !plan.Version.IsNull() && !plan.Version.IsUnknown() &&
+		(currentState.Version.IsNull() || plan.Version.ValueInt64() != currentState.Version.ValueInt64())
+
+	if nameChanged || versionChanged {
+		// Generate new hash for updated name/version
+		version := int64(1)
+		if !plan.Version.IsNull() && !plan.Version.IsUnknown() {
+			version = plan.Version.ValueInt64()
+		}
+
+		nameHash, err := generateNameHash(plan.Name.ValueString(), plan.ServerNumber.ValueInt64(), version)
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to generate name hash", err.Error())
+			return
+		}
+
+		// Compute new server_name and robot_name
+		serverName, robotName := computeNames(plan.Name.ValueString(), nameHash)
+		plan.ServerName = types.StringValue(serverName)
+		plan.RobotName = types.StringValue(robotName)
+	} else {
+		// Preserve existing computed names if name and version didn't change
+		plan.ServerName = currentState.ServerName
+		plan.RobotName = currentState.RobotName
 	}
 
-	if robotName != "" {
-		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), robotName)
+	// Update server name in Robot interface
+	if !plan.RobotName.IsNull() && !plan.RobotName.IsUnknown() {
+		err := r.providerData.Client.SetServerName(int(plan.ServerNumber.ValueInt64()), plan.RobotName.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("update server name failed", err.Error())
 			return
 		}
-		tflog.Info(ctx, "updated server name in Robot interface", map[string]interface{}{
+		tflog.Info(ctx, "updated computed server name in Robot interface", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
-			"robot_name":    robotName,
+			"robot_name":    plan.RobotName.ValueString(),
 			"server_name":   plan.ServerName.ValueString(),
 		})
 	}
