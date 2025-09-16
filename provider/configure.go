@@ -385,7 +385,7 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 	k3sScript := buildK3SScript(plan, ctx)
 
 	postinstallFirstRunContent := strings.ReplaceAll(postinstallFirstRunScript, "LOCALIPADDRESSREPLACEME", localIP)
-	postinstallFirstRunContent = strings.ReplaceAll(postinstallFirstRunContent, "# EXTRASCRIPTREPLACEME", k3sScript)
+	postinstallFirstRunContent = strings.ReplaceAll(postinstallFirstRunContent, "# EXTRASCRIPTREPLACEME", "")
 
 	tflog.Info(ctx, "uploading postinstall - first run script", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
@@ -400,6 +400,100 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 		tflog.Warn(ctx, "failed to run script permissions", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
 			"error":         err.Error(),
+		})
+	}
+
+	// Close the current SSH connection before rebooting
+	closeFn2()
+
+	// Issue reboot command via SSH (non-blocking)
+	tflog.Info(ctx, "initiating server reboot", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_ip":     ip,
+	})
+
+	// Quick SSH connection just to issue the reboot command
+	rebootConn, rebootCloseFn, err := sshx.Connect(sshx.Conn{Host: ip, User: "root", Timeout: 30 * time.Second, Auth: auth, InsecureIgnoreHostKey: true})
+	if err != nil {
+		return "reboot ssh connect", err.Error()
+	}
+
+	// Send reboot command (this will likely cause the connection to drop)
+	_, _ = sshx.Run(rebootConn, "nohup reboot > /dev/null 2>&1 &")
+	rebootCloseFn()
+
+	// Wait for system to go down and come back up
+	tflog.Info(ctx, "waiting for server to reboot", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_ip":     ip,
+	})
+
+	// Wait a bit for the reboot to start
+	time.Sleep(10 * time.Second)
+
+	// Wait for SSH port to become available again
+	if err := waitTCP(ip+":22", 10*time.Minute); err != nil {
+		return "reboot ssh timeout", err.Error()
+	}
+
+	tflog.Info(ctx, "server back online after reboot, waiting for network connectivity", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_ip":     ip,
+	})
+
+	// Establish new SSH connection for post-reboot tasks
+	postRebootConn, postRebootCloseFn, err := sshx.Connect(sshx.Conn{Host: ip, User: "root", Timeout: 3 * time.Minute, Auth: auth, InsecureIgnoreHostKey: true})
+	if err != nil {
+		return "post-reboot ssh connect", err.Error()
+	}
+	defer postRebootCloseFn()
+
+	// Wait for ping to 10.0.0.120 to succeed
+	pingScript := `
+#!/bin/bash
+PING_COUNT=0
+MAX_PING_ATTEMPTS=60  # 5 minutes max
+
+echo "Waiting for ping to 10.0.0.120 to succeed..."
+while ! ping -c 1 -W 2 10.0.0.120 > /dev/null 2>&1; do
+    PING_COUNT=$((PING_COUNT + 1))
+    if [ $PING_COUNT -ge $MAX_PING_ATTEMPTS ]; then
+        echo "Error: Failed to ping 10.0.0.120 after $MAX_PING_ATTEMPTS attempts"
+        exit 1
+    fi
+    echo "Attempt $PING_COUNT/$MAX_PING_ATTEMPTS: Waiting for network connectivity..."
+    sleep 5
+done
+echo "✓ Successfully pinged 10.0.0.120, network is ready"
+`
+
+	tflog.Info(ctx, "checking network connectivity to 10.0.0.120", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_ip":     ip,
+	})
+
+	if _, err := sshx.Run(postRebootConn, pingScript); err != nil {
+		return "ping check failed", err.Error()
+	}
+
+	// Now run the K3S installation script
+	if k3sScript != "" && !strings.Contains(k3sScript, "skipping K3S installation") {
+		tflog.Info(ctx, "installing K3S", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"server_ip":     ip,
+		})
+
+		if _, err := sshx.Run(postRebootConn, k3sScript); err != nil {
+			return "k3s installation failed", err.Error()
+		}
+
+		tflog.Info(ctx, "K3S installation completed successfully", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"server_ip":     ip,
+		})
+	} else {
+		tflog.Info(ctx, "K3S installation skipped", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
 		})
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -129,21 +130,30 @@ func (p *hrobotProvider) DataSources(_ context.Context) []func() datasource.Data
 	}
 }
 
-// GetNextAvailableIP assigns the next available IP in the range 10.1.0.2 to 10.1.0.127
+// GetNextAvailableIP assigns a random available IP in the range 10.1.0.2 to 10.1.0.127
 func (pd *ProviderData) GetNextAvailableIP() (string, error) {
 	pd.IPMutex.Lock()
 	defer pd.IPMutex.Unlock()
 
-	// Range: 10.1.0.2 to 10.1.0.127
+	// Collect all available IPs in the range 10.1.0.2 to 10.1.0.127
+	var availableIPs []string
 	for i := 2; i <= 127; i++ {
 		ip := fmt.Sprintf("10.1.0.%d", i)
 		if !pd.UsedIPs[ip] {
-			pd.UsedIPs[ip] = true
-			return ip, nil
+			availableIPs = append(availableIPs, ip)
 		}
 	}
 
-	return "", fmt.Errorf("no available IP addresses in range 10.1.0.2-10.1.0.127")
+	if len(availableIPs) == 0 {
+		return "", fmt.Errorf("no available IP addresses in range 10.1.0.2-10.1.0.127")
+	}
+
+	// Randomly select from available IPs
+	randomIndex := rand.Intn(len(availableIPs))
+	selectedIP := availableIPs[randomIndex]
+	pd.UsedIPs[selectedIP] = true
+
+	return selectedIP, nil
 }
 
 // ReleaseIP marks an IP as available for reuse
