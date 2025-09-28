@@ -178,7 +178,7 @@ apt-get install -y dropbear-initramfs
 
 # Configure dropbear
 mkdir -p /etc/dropbear/initramfs
-echo 'DROPBEAR_OPTIONS="-p 2222 -s -j -k -I 60 -W 65536"' > /etc/dropbear/initramfs/dropbear.conf
+echo 'DROPBEAR_OPTIONS="-p 2222 -s -j -k -I 0 -W 65536"' > /etc/dropbear/initramfs/dropbear.conf
 
 # Process SSH keys with dropbear-specific requirements
 if [ -f /root/.ssh/authorized_keys ]; then
@@ -195,7 +195,7 @@ echo "Finalizing dropbear configuration..."
 
 # Ensure the config file has proper format
 cat > /etc/dropbear/initramfs/dropbear.conf << 'EOF'
-DROPBEAR_OPTIONS="-p 2222 -s -j -k -I 60 -W 65536"
+DROPBEAR_OPTIONS="-p 2222 -s -j -k -I 0 -W 65536"
 EOF
 
 # Verify authorized_keys file exists and has content
