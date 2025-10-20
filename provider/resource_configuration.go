@@ -34,15 +34,17 @@ type configurationModel struct {
 	RaidLevel    types.Int64  `tfsdk:"raid_level"`
 
 	// Autosetup parameters
-	Arch          types.String `tfsdk:"arch"`
-	CryptPassword types.String `tfsdk:"cryptpassword"`
-	NoUEFI        types.Bool   `tfsdk:"no_uefi"`
+	Arch           types.String `tfsdk:"arch"`
+	CryptPassword  types.String `tfsdk:"cryptpassword"`
+	NoUEFI         types.Bool   `tfsdk:"no_uefi"`
+	FilesystemType types.String `tfsdk:"filesystem_type"`
 
 	// K3S parameters
 	K3SToken   types.String `tfsdk:"k3s_token"`
 	K3SURL     types.String `tfsdk:"k3s_url"`
 	NodeLabels types.List   `tfsdk:"node_labels"`
 	Taints     types.List   `tfsdk:"taints"`
+	CPUManager types.Bool   `tfsdk:"cpu_manager"`
 
 	RescueKeyFPs types.List `tfsdk:"rescue_authorized_key_fingerprints"`
 }
@@ -88,9 +90,10 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 			"raid_level":    rschema.Int64Attribute{Optional: true, Description: "RAID level for software RAID configuration (default: 1)"},
 
 			// Autosetup parameters
-			"arch":          rschema.StringAttribute{Required: true, Description: "Architecture for the OS image (arm64 or amd64)"},
-			"cryptpassword": rschema.StringAttribute{Required: true, Sensitive: true, Description: "Password for disk encryption (used in autosetup)"},
-			"no_uefi":       rschema.BoolAttribute{Optional: true, Description: "If true, removes the UEFI boot partition from the disk partitioning scheme"},
+			"arch":            rschema.StringAttribute{Required: true, Description: "Architecture for the OS image (arm64 or amd64)"},
+			"cryptpassword":   rschema.StringAttribute{Required: true, Sensitive: true, Description: "Password for disk encryption (used in autosetup)"},
+			"no_uefi":         rschema.BoolAttribute{Optional: true, Description: "If true, removes the UEFI boot partition from the disk partitioning scheme"},
+			"filesystem_type": rschema.StringAttribute{Optional: true, Description: "Filesystem type for root partition (default: ext4)"},
 
 			// K3S parameters
 			"k3s_token": rschema.StringAttribute{Required: true, Sensitive: true, Description: "K3S token for joining the cluster"},
@@ -109,6 +112,10 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 				Optional:    true,
 				ElementType: types.StringType,
 				Description: "List of taints to apply to this K3S node (e.g., 'localstorage=true:NoSchedule')",
+			},
+			"cpu_manager": rschema.BoolAttribute{
+				Optional:    true,
+				Description: "Enable CPU manager with static policy and resource reservations (cpu-manager-policy=static, system-reserved=cpu=1, kube-reserved=cpu=1)",
 			},
 
 			"rescue_authorized_key_fingerprints": rschema.ListAttribute{

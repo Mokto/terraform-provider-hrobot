@@ -14,7 +14,7 @@ import (
 )
 
 // buildAutosetupContent generates autosetup configuration from parameters
-func buildAutosetupContent(serverName, arch, cryptPassword string, raidLevel int64, drive1, drive2 string, noUEFI bool) string {
+func buildAutosetupContent(serverName, arch, cryptPassword, filesystemType string, raidLevel int64, drive1, drive2 string, noUEFI bool) string {
 	// Build the autosetup content
 	var content string
 	if noUEFI {
@@ -25,9 +25,9 @@ SWRAID 1
 SWRAIDLEVEL %d
 BOOTLOADER grub
 PART /boot ext4 1G
-PART /     ext4 all crypt
+PART /     %s all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
-HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, arch, serverName)
+HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, filesystemType, arch, serverName)
 	} else {
 		content = fmt.Sprintf(`CRYPTPASSWORD %s
 DRIVE1 %s
@@ -37,9 +37,9 @@ SWRAIDLEVEL %d
 BOOTLOADER grub
 PART /boot/efi esp 512M
 PART /boot ext4 1G
-PART /     ext4 all crypt
+PART /     %s all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
-HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, arch, serverName)
+HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, filesystemType, arch, serverName)
 	}
 
 	return content
@@ -83,6 +83,14 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 				kubeletArgs = append(kubeletArgs, fmt.Sprintf("--kubelet-arg=register-with-taints=%s", taint.ValueString()))
 			}
 		}
+	}
+
+	// Add CPU manager arguments if enabled
+	if !plan.CPUManager.IsNull() && !plan.CPUManager.IsUnknown() && plan.CPUManager.ValueBool() {
+		kubeletArgs = append(kubeletArgs, "--kubelet-arg=cpu-manager-policy=static")
+		kubeletArgs = append(kubeletArgs, "--kubelet-arg=cpu-manager-reconcile-period=5s")
+		kubeletArgs = append(kubeletArgs, "--kubelet-arg=system-reserved=cpu=1")
+		kubeletArgs = append(kubeletArgs, "--kubelet-arg=kube-reserved=cpu=1")
 	}
 
 	// Build the complete K3S installation command
@@ -260,7 +268,13 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		noUEFI = plan.NoUEFI.ValueBool()
 	}
 
-	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword, raidLevel, drive1, drive2, noUEFI)
+	// Default filesystem type to ext4 if not specified
+	filesystemType := "ext4"
+	if !plan.FilesystemType.IsNull() && !plan.FilesystemType.IsUnknown() {
+		filesystemType = plan.FilesystemType.ValueString()
+	}
+
+	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword, filesystemType, raidLevel, drive1, drive2, noUEFI)
 
 	tflog.Info(ctx, "uploading autosetup configuration", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
