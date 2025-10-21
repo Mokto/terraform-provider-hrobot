@@ -212,30 +212,72 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		"server_number": plan.ServerNumber.ValueInt64(),
 	})
 
-	diskOutput, err := sshx.Run(conn, "lsblk -d -o NAME,SIZE,TYPE | grep disk")
+	diskOutput, err := sshx.Run(conn, "lsblk -d -b -o NAME,SIZE,TYPE | grep disk")
 	if err != nil {
 		return "disk detection failed", fmt.Sprintf("Failed to detect disks: %v", err)
 	}
 
-	// Parse disk output to get exactly 2 disks
+	// Parse disk output to get 2 or 4 disks
 	diskLines := strings.Split(strings.TrimSpace(diskOutput), "\n")
-	if len(diskLines) != 2 {
-		return "invalid disk count", fmt.Sprintf("Expected exactly 2 disks, found %d disks: %s", len(diskLines), diskOutput)
+	if len(diskLines) != 2 && len(diskLines) != 4 {
+		return "invalid disk count", fmt.Sprintf("Expected exactly 2 or 4 disks, found %d disks: %s", len(diskLines), diskOutput)
 	}
 
-	// Extract disk names (first field of each line)
-	var drive1, drive2 string
-	for i, line := range diskLines {
+	// Parse disk information (name and size in bytes)
+	type diskInfo struct {
+		name      string
+		sizeBytes int64
+	}
+	var disks []diskInfo
+
+	for _, line := range diskLines {
 		fields := strings.Fields(line)
-		if len(fields) < 1 {
+		if len(fields) < 2 {
 			return "disk parsing error", fmt.Sprintf("Could not parse disk line: %s", line)
 		}
-		diskName := "/dev/" + fields[0]
-		if i == 0 {
-			drive1 = diskName
-		} else {
-			drive2 = diskName
+
+		// Parse size in bytes
+		var sizeBytes int64
+		if _, err := fmt.Sscanf(fields[1], "%d", &sizeBytes); err != nil {
+			return "disk size parsing error", fmt.Sprintf("Could not parse disk size from line: %s", line)
 		}
+
+		disks = append(disks, diskInfo{
+			name:      "/dev/" + fields[0],
+			sizeBytes: sizeBytes,
+		})
+	}
+
+	// Select the 2 biggest disks
+	var drive1, drive2 string
+	if len(disks) == 2 {
+		drive1 = disks[0].name
+		drive2 = disks[1].name
+	} else {
+		// For 4 disks, sort by size (descending) and select the 2 biggest
+		tflog.Info(ctx, "detected 4 disks, selecting 2 biggest", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+		})
+
+		// Simple bubble sort to find the 2 largest (efficient enough for 4 items)
+		for i := 0; i < len(disks)-1; i++ {
+			for j := 0; j < len(disks)-i-1; j++ {
+				if disks[j].sizeBytes < disks[j+1].sizeBytes {
+					disks[j], disks[j+1] = disks[j+1], disks[j]
+				}
+			}
+		}
+
+		drive1 = disks[0].name
+		drive2 = disks[1].name
+
+		tflog.Info(ctx, "selected largest disks", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"drive1":        drive1,
+			"drive1_bytes":  disks[0].sizeBytes,
+			"drive2":        drive2,
+			"drive2_bytes":  disks[1].sizeBytes,
+		})
 	}
 
 	tflog.Info(ctx, "detected disks", map[string]interface{}{
