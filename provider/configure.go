@@ -17,8 +17,31 @@ import (
 func buildAutosetupContent(serverName, arch, cryptPassword, filesystemType string, raidLevel int64, drive1, drive2 string, noUEFI bool) string {
 	// Build the autosetup content
 	var content string
-	if noUEFI {
-		content = fmt.Sprintf(`CRYPTPASSWORD %s
+
+	// If drive2 is empty, we're using single disk setup (no RAID)
+	if drive2 == "" {
+		if noUEFI {
+			content = fmt.Sprintf(`CRYPTPASSWORD %s
+DRIVE1 %s
+BOOTLOADER grub
+PART /boot ext4 1G
+PART /     %s all crypt
+IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
+HOSTNAME %s`, cryptPassword, drive1, filesystemType, arch, serverName)
+		} else {
+			content = fmt.Sprintf(`CRYPTPASSWORD %s
+DRIVE1 %s
+BOOTLOADER grub
+PART /boot/efi esp 512M
+PART /boot ext4 1G
+PART /     %s all crypt
+IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
+HOSTNAME %s`, cryptPassword, drive1, filesystemType, arch, serverName)
+		}
+	} else {
+		// RAID setup with two disks
+		if noUEFI {
+			content = fmt.Sprintf(`CRYPTPASSWORD %s
 DRIVE1 %s
 DRIVE2 %s
 SWRAID 1
@@ -28,8 +51,8 @@ PART /boot ext4 1G
 PART /     %s all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
 HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, filesystemType, arch, serverName)
-	} else {
-		content = fmt.Sprintf(`CRYPTPASSWORD %s
+		} else {
+			content = fmt.Sprintf(`CRYPTPASSWORD %s
 DRIVE1 %s
 DRIVE2 %s
 SWRAID 1
@@ -40,6 +63,7 @@ PART /boot ext4 1G
 PART /     %s all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
 HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, filesystemType, arch, serverName)
+		}
 	}
 
 	return content
@@ -217,10 +241,10 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		return "disk detection failed", fmt.Sprintf("Failed to detect disks: %v", err)
 	}
 
-	// Parse disk output to get 2 or 4 disks
+	// Parse disk output to get 2, 3, or 4 disks
 	diskLines := strings.Split(strings.TrimSpace(diskOutput), "\n")
-	if len(diskLines) != 2 && len(diskLines) != 4 {
-		return "invalid disk count", fmt.Sprintf("Expected exactly 2 or 4 disks, found %d disks: %s", len(diskLines), diskOutput)
+	if len(diskLines) < 2 || len(diskLines) > 4 {
+		return "invalid disk count", fmt.Sprintf("Expected 2-4 disks, found %d disks: %s", len(diskLines), diskOutput)
 	}
 
 	// Parse disk information (name and size in bytes)
@@ -248,30 +272,46 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		})
 	}
 
-	// Select the 2 biggest disks
-	var drive1, drive2 string
-	if len(disks) == 2 {
-		drive1 = disks[0].name
-		drive2 = disks[1].name
-	} else {
-		// For 4 disks, sort by size (descending) and select the 2 biggest
-		tflog.Info(ctx, "detected 4 disks, selecting 2 biggest", map[string]interface{}{
-			"server_number": plan.ServerNumber.ValueInt64(),
-		})
-
-		// Simple bubble sort to find the 2 largest (efficient enough for 4 items)
-		for i := 0; i < len(disks)-1; i++ {
-			for j := 0; j < len(disks)-i-1; j++ {
-				if disks[j].sizeBytes < disks[j+1].sizeBytes {
-					disks[j], disks[j+1] = disks[j+1], disks[j]
-				}
+	// Sort disks by size (descending)
+	for i := 0; i < len(disks)-1; i++ {
+		for j := 0; j < len(disks)-i-1; j++ {
+			if disks[j].sizeBytes < disks[j+1].sizeBytes {
+				disks[j], disks[j+1] = disks[j+1], disks[j]
 			}
 		}
+	}
 
+	// Select disks based on count:
+	// 2 disks: use both (RAID)
+	// 3 disks: use only the largest (no RAID)
+	// 4 disks: use the 2 largest (RAID)
+	var drive1, drive2 string
+
+	if len(disks) == 2 {
+		// Use both disks for RAID
 		drive1 = disks[0].name
 		drive2 = disks[1].name
-
-		tflog.Info(ctx, "selected largest disks", map[string]interface{}{
+		tflog.Info(ctx, "selected 2 disks for RAID", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"drive1":        drive1,
+			"drive1_bytes":  disks[0].sizeBytes,
+			"drive2":        drive2,
+			"drive2_bytes":  disks[1].sizeBytes,
+		})
+	} else if len(disks) == 3 {
+		// Use only the largest disk (no RAID)
+		drive1 = disks[0].name
+		drive2 = "" // No second drive
+		tflog.Info(ctx, "selected largest disk only (no RAID)", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"drive1":        drive1,
+			"drive1_bytes":  disks[0].sizeBytes,
+		})
+	} else if len(disks) == 4 {
+		// Use the 2 largest disks for RAID
+		drive1 = disks[0].name
+		drive2 = disks[1].name
+		tflog.Info(ctx, "selected 2 largest disks for RAID", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
 			"drive1":        drive1,
 			"drive1_bytes":  disks[0].sizeBytes,
@@ -279,12 +319,6 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 			"drive2_bytes":  disks[1].sizeBytes,
 		})
 	}
-
-	tflog.Info(ctx, "detected disks", map[string]interface{}{
-		"server_number": plan.ServerNumber.ValueInt64(),
-		"drive1":        drive1,
-		"drive2":        drive2,
-	})
 
 	// Generate autosetup content from parameters
 	serverName := plan.ServerName.ValueString()
@@ -302,6 +336,7 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		"server_name":   serverName,
 		"arch":          arch,
 		"raid_level":    raidLevel,
+		"using_raid":    drive2 != "",
 	})
 
 	// Check no_uefi parameter
