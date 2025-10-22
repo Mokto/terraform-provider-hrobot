@@ -10,8 +10,78 @@ set -e
 CRYPT_PASSWORD="SECRETPASSWORDREPLACEME"
 KEYFILE_PATH="/etc/luks-keys/boot.key"
 KEYFILE_DIR="/etc/luks-keys"
+UNUSED_DISKS="UNUSEDDISKSREPLACEME"
 
 echo "Starting Hetzner auto-unlock setup..."
+
+# Wipe and disable unused disks (3 and 4 disk setups only)
+if [ -n "$UNUSED_DISKS" ] && [ "$UNUSED_DISKS" != "" ]; then
+    echo "============================================"
+    echo "Wiping unused disks: $UNUSED_DISKS"
+    echo "============================================"
+
+    for disk in $UNUSED_DISKS; do
+        echo ""
+        echo "Processing unused disk: $disk"
+
+        # Check if disk exists
+        if [ ! -b "$disk" ]; then
+            echo "⚠ Warning: Disk $disk does not exist, skipping"
+            continue
+        fi
+
+        # Get disk size for verification
+        DISK_SIZE=$(lsblk -b -d -n -o SIZE "$disk" 2>/dev/null || echo "unknown")
+        echo "Disk size: $DISK_SIZE bytes"
+
+        # Unmount any partitions on this disk
+        echo "Unmounting any mounted partitions on $disk..."
+        for partition in ${disk}* ${disk}p*; do
+            if [ -b "$partition" ]; then
+                umount -f "$partition" 2>/dev/null || true
+            fi
+        done
+
+        # Remove from any RAID arrays
+        echo "Removing $disk from any RAID arrays..."
+        mdadm --stop --scan 2>/dev/null || true
+        for partition in ${disk}* ${disk}p*; do
+            if [ -b "$partition" ]; then
+                mdadm --zero-superblock "$partition" 2>/dev/null || true
+            fi
+        done
+        mdadm --zero-superblock "$disk" 2>/dev/null || true
+
+        # Wipe partition table and beginning of disk
+        echo "Wiping partition table on $disk..."
+        dd if=/dev/zero of="$disk" bs=1M count=100 status=progress 2>&1 || echo "Failed to wipe $disk"
+
+        # Use wipefs to remove filesystem signatures
+        echo "Removing filesystem signatures from $disk..."
+        wipefs -a "$disk" 2>/dev/null || true
+
+        # Write zeros to the end of the disk as well (to remove backup GPT)
+        echo "Wiping end of disk $disk..."
+        DISK_SIZE_MB=$((DISK_SIZE / 1048576))
+        if [ "$DISK_SIZE_MB" -gt 100 ]; then
+            dd if=/dev/zero of="$disk" bs=1M seek=$((DISK_SIZE_MB - 100)) count=100 2>/dev/null || true
+        fi
+
+        # Create a flag file to mark this disk as intentionally wiped
+        DISK_ID=$(basename "$disk")
+        touch "/etc/disk-wiped-${DISK_ID}" 2>/dev/null || true
+
+        echo "✓ Successfully wiped and disabled $disk"
+    done
+
+    echo ""
+    echo "============================================"
+    echo "✓ All unused disks have been wiped"
+    echo "============================================"
+    echo ""
+else
+    echo "No unused disks to wipe (2-disk setup)"
+fi
 
 # Detect number of disks
 DISK_COUNT=$(lsblk -d -n -o TYPE,NAME | grep -c '^disk' || echo "0")
@@ -21,7 +91,23 @@ echo "Detected $DISK_COUNT disk(s)"
 if [ "$DISK_COUNT" -eq 3 ]; then
     # 3-disk setup uses single disk (no RAID)
     echo "3-disk configuration detected, using single disk LUKS partition"
-    LUKS_DEVICE=$(blkid -t TYPE=crypto_LUKS -o device | head -1)
+
+    # Find the LUKS device by looking at what's currently mounted
+    # The root partition is encrypted, so find its backing device
+    ROOT_DEVICE=$(findmnt -n -o SOURCE /)
+    echo "Root filesystem is on: $ROOT_DEVICE"
+
+    if [[ "$ROOT_DEVICE" == /dev/mapper/* ]]; then
+        # This is a mapped device, find the underlying LUKS device
+        MAPPER_NAME=$(basename "$ROOT_DEVICE")
+        LUKS_DEVICE=$(cryptsetup status "$MAPPER_NAME" | grep device: | awk '{print $2}')
+        echo "Found LUKS device from active mapping: $LUKS_DEVICE"
+    else
+        # Fallback: try to find LUKS device by type
+        LUKS_DEVICE=$(blkid -t TYPE=crypto_LUKS -o device | head -1)
+        echo "Found LUKS device by blkid: $LUKS_DEVICE"
+    fi
+
     if [ -z "$LUKS_DEVICE" ]; then
         echo "ERROR: No LUKS device found on single disk"
         exit 1
@@ -30,13 +116,28 @@ if [ "$DISK_COUNT" -eq 3 ]; then
 else
     # 2 or 4 disk setup uses RAID
     echo "RAID configuration detected, looking for md device"
-    BIGGEST_MD=$(awk '/^md[0-9]+ : active/ {print $1, $5}' /proc/mdstat | sort -k2 -nr | head -1 | cut -d' ' -f1)
-    if [ -z "$BIGGEST_MD" ]; then
-        echo "ERROR: No RAID device found in /proc/mdstat"
-        exit 1
+
+    # Find the LUKS device by looking at what's currently mounted
+    ROOT_DEVICE=$(findmnt -n -o SOURCE /)
+    echo "Root filesystem is on: $ROOT_DEVICE"
+
+    if [[ "$ROOT_DEVICE" == /dev/mapper/* ]]; then
+        # This is a mapped device, find the underlying LUKS device (should be RAID)
+        MAPPER_NAME=$(basename "$ROOT_DEVICE")
+        LUKS_DEVICE=$(cryptsetup status "$MAPPER_NAME" | grep device: | awk '{print $2}')
+        echo "Found LUKS device from active mapping: $LUKS_DEVICE"
+    else
+        # Fallback: find biggest RAID device
+        BIGGEST_MD=$(awk '/^md[0-9]+ : active/ {print $1, $5}' /proc/mdstat | sort -k2 -nr | head -1 | cut -d' ' -f1)
+        if [ -z "$BIGGEST_MD" ]; then
+            echo "ERROR: No RAID device found in /proc/mdstat"
+            exit 1
+        fi
+        LUKS_DEVICE="/dev/$BIGGEST_MD"
+        echo "Found RAID device from mdstat: $LUKS_DEVICE"
     fi
-    LUKS_DEVICE="/dev/$BIGGEST_MD"
-    echo "Detected RAID device: $LUKS_DEVICE"
+
+    echo "Detected RAID LUKS device: $LUKS_DEVICE"
 fi
 
 # Create directory for key files
@@ -50,52 +151,40 @@ chmod 600 "$KEYFILE_PATH"
 # Add the key to the LUKS device (with proper error handling and debugging)
 echo "Adding key file to LUKS device $LUKS_DEVICE..."
 
-# Test the password first
-echo "Testing password against LUKS device..."
-if ! echo "$CRYPT_PASSWORD" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE"; then
-    echo "ERROR: Password test failed"
-    echo "This could be due to:"
-    echo "1. Incorrect password"
-    echo "2. LUKS device not properly initialized"
-    echo "3. Device busy or mounted"
+# Check if device is currently open (which it should be since we're running inside it)
+DEVICE_STATUS=$(cryptsetup status "$MAPPER_NAME" 2>/dev/null || echo "")
+if [ -n "$DEVICE_STATUS" ]; then
+    echo "✓ LUKS device is currently open and mounted (expected)"
+else
+    echo "⚠ Warning: LUKS device doesn't appear to be open"
+fi
+
+# Show current keyslots before adding
+echo "Current keyslots before addition:"
+cryptsetup luksDump "$LUKS_DEVICE" | grep -A10 "Keyslots:" || echo "Failed to show keyslots"
+
+# Add the key file to LUKS device
+# Note: We don't test the password first because the device is already open and mounted
+# We trust that the password in CRYPT_PASSWORD is correct (it was used during installation)
+echo "Adding key file to LUKS device..."
+
+TEMP_PASS_FILE=$(mktemp)
+echo "$CRYPT_PASSWORD" > "$TEMP_PASS_FILE"
+chmod 600 "$TEMP_PASS_FILE"
+
+if cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH" --verbose < "$TEMP_PASS_FILE"; then
+    echo "✓ Key file successfully added to LUKS device"
+    KEY_ADDED=true
+else
+    KEY_ADDED=false
+    RESULT=$?
+    echo "ERROR: Failed to add key file to LUKS device (exit code: $RESULT)"
 
     # Additional debugging
     echo ""
     echo "LUKS device info:"
     cryptsetup luksDump "$LUKS_DEVICE" 2>&1 || echo "Failed to dump LUKS info"
 
-    exit 1
-fi
-
-echo "Password test successful, adding key file..."
-
-# Small delay to ensure device state is stable
-sleep 1
-
-# Show current keyslots before adding
-echo "Current keyslots before addition:"
-cryptsetup luksDump "$LUKS_DEVICE" | grep -A10 "Keyslots:" || echo "Failed to show keyslots"
-
-# Add the key with more verbose output and alternative method
-echo "Attempting to add key file..."
-
-TEMP_PASS_FILE=$(mktemp)
-echo "$CRYPT_PASSWORD" > "$TEMP_PASS_FILE"
-chmod 600 "$TEMP_PASS_FILE"
-if cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH" --verbose < "$TEMP_PASS_FILE"; then
-    echo "Key file successfully added to LUKS device (method 3)"
-    KEY_ADDED=true
-else
-    KEY_ADDED=false
-fi
-# Clean up temp file
-rm -f "$TEMP_PASS_FILE"
-
-if [ "$KEY_ADDED" != "true" ]; then
-    RESULT=$?
-    echo "ERROR: All methods failed to add key file to LUKS device"
-
-    # Additional debugging
     echo ""
     echo "Final LUKS keyslots:"
     cryptsetup luksDump "$LUKS_DEVICE" | grep -A10 "Keyslots:" || echo "Failed to show keyslots"
@@ -103,19 +192,26 @@ if [ "$KEY_ADDED" != "true" ]; then
     echo ""
     echo "Key file info:"
     ls -la "$KEYFILE_PATH"
-    hexdump -C "$KEYFILE_PATH" | head -2
 
     echo ""
-    echo "Device status:"
-    lsblk | grep md2
+    echo "Checking if password file is readable:"
+    ls -la "$TEMP_PASS_FILE"
 
+    echo ""
+    echo "Password length: $(wc -c < "$TEMP_PASS_FILE") bytes"
+fi
+
+# Clean up temp file
+rm -f "$TEMP_PASS_FILE"
+
+if [ "$KEY_ADDED" != "true" ]; then
     exit 1
 fi
 
 # Verify the key file works
 echo "Testing key file..."
 if cryptsetup luksOpen --test-passphrase --key-file="$KEYFILE_PATH" "$LUKS_DEVICE"; then
-    echo "Key file test successful"
+    echo "✓ Key file test successful"
 else
     echo "ERROR: Key file test failed"
     exit 1

@@ -5,6 +5,49 @@ const postinstallFirstRunScript = `#!/bin/bash
 
 LOCAL_IP="LOCALIPADDRESSREPLACEME"
 
+# Verify unused disks remain wiped and create udev rules to prevent mounting
+echo "Checking for wiped disks and creating safeguards..."
+WIPED_DISKS=$(ls /etc/disk-wiped-* 2>/dev/null | sed 's|/etc/disk-wiped-||' || echo "")
+if [ -n "$WIPED_DISKS" ]; then
+    echo "Found wiped disks: $WIPED_DISKS"
+
+    # Create udev rules to prevent automatic mounting of these disks
+    mkdir -p /etc/udev/rules.d
+    cat > /etc/udev/rules.d/99-block-unused-disks.rules << 'UDEV_EOF'
+# Prevent unused disks from being mounted or accessed
+# Generated automatically by Hetzner provisioning
+UDEV_EOF
+
+    for disk_id in $WIPED_DISKS; do
+        # Add udev rule to block the device
+        echo "KERNEL==\"${disk_id}\", ENV{UDISKS_IGNORE}=\"1\", ENV{UDISKS_PRESENTATION_HIDE}=\"1\"" >> /etc/udev/rules.d/99-block-unused-disks.rules
+        echo "KERNEL==\"${disk_id}[0-9]*\", ENV{UDISKS_IGNORE}=\"1\", ENV{UDISKS_PRESENTATION_HIDE}=\"1\"" >> /etc/udev/rules.d/99-block-unused-disks.rules
+        echo "KERNEL==\"${disk_id}p[0-9]*\", ENV{UDISKS_IGNORE}=\"1\", ENV{UDISKS_PRESENTATION_HIDE}=\"1\"" >> /etc/udev/rules.d/99-block-unused-disks.rules
+
+        # Verify the disk is still wiped
+        DISK_PATH="/dev/${disk_id}"
+        if [ -b "$DISK_PATH" ]; then
+            # Check if disk has any partition table
+            PARTITIONS=$(lsblk -n "$DISK_PATH" 2>/dev/null | wc -l)
+            if [ "$PARTITIONS" -gt 1 ]; then
+                echo "⚠ WARNING: Disk $DISK_PATH has partitions, re-wiping..."
+                dd if=/dev/zero of="$DISK_PATH" bs=1M count=100 2>/dev/null || true
+                wipefs -a "$DISK_PATH" 2>/dev/null || true
+            else
+                echo "✓ Disk $DISK_PATH remains wiped"
+            fi
+        fi
+    done
+
+    # Reload udev rules
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger 2>/dev/null || true
+
+    echo "✓ Created udev rules to prevent unused disks from being mounted"
+else
+    echo "No wiped disks found (2-disk setup)"
+fi
+
 # Configure local IP if provided
 if [ -n "$LOCAL_IP" ] && [ "$LOCAL_IP" != "" ]; then
     echo "Configuring local IP address: $LOCAL_IP"

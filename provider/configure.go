@@ -290,6 +290,7 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 	// 3 disks: use only the largest (no RAID)
 	// 4 disks: use the 2 largest (RAID)
 	var drive1, drive2 string
+	var unusedDisks []string
 
 	if len(disks) == 2 {
 		// Use both disks for RAID
@@ -302,25 +303,32 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 			"drive2":        drive2,
 			"drive2_bytes":  disks[1].sizeBytes,
 		})
+		// No unused disks
 	} else if len(disks) == 3 {
 		// Use only the largest disk (no RAID)
 		drive1 = disks[0].name
 		drive2 = "" // No second drive
+		// Mark the 2 smaller disks as unused
+		unusedDisks = []string{disks[1].name, disks[2].name}
 		tflog.Info(ctx, "selected largest disk only (no RAID)", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
 			"drive1":        drive1,
 			"drive1_bytes":  disks[0].sizeBytes,
+			"unused_disks":  unusedDisks,
 		})
 	} else if len(disks) == 4 {
 		// Use the 2 largest disks for RAID
 		drive1 = disks[0].name
 		drive2 = disks[1].name
+		// Mark the 2 smaller disks as unused
+		unusedDisks = []string{disks[2].name, disks[3].name}
 		tflog.Info(ctx, "selected 2 largest disks for RAID", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
 			"drive1":        drive1,
 			"drive1_bytes":  disks[0].sizeBytes,
 			"drive2":        drive2,
 			"drive2_bytes":  disks[1].sizeBytes,
+			"unused_disks":  unusedDisks,
 		})
 	}
 
@@ -370,12 +378,17 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		"server_number": plan.ServerNumber.ValueInt64(),
 	})
 
-	// Generate postinstall script with the correct password and local IP
+	// Generate postinstall script with the correct password and unused disks list
 	postinstallContent := strings.ReplaceAll(postinstallScript, "SECRETPASSWORDREPLACEME", cryptPassword)
+
+	// Create a space-separated list of unused disks for the script
+	unusedDisksStr := strings.Join(unusedDisks, " ")
+	postinstallContent = strings.ReplaceAll(postinstallContent, "UNUSEDDISKSREPLACEME", unusedDisksStr)
 
 	tflog.Info(ctx, "uploading postinstall script", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
 		"script_size":   len(postinstallContent),
+		"unused_disks":  unusedDisksStr,
 	})
 
 	if err := sshx.Upload(conn, "/root/post-install.sh", []byte(postinstallContent), 0700); err != nil {
