@@ -8,12 +8,36 @@ const postinstallScript = `#!/bin/bash
 set -e
 
 CRYPT_PASSWORD="SECRETPASSWORDREPLACEME"
-BIGGEST_MD=$(awk '/^md[0-9]+ : active/ {print $1, $5}' /proc/mdstat | sort -k2 -nr | head -1 | cut -d' ' -f1)
-LUKS_DEVICE="/dev/$BIGGEST_MD"
 KEYFILE_PATH="/etc/luks-keys/boot.key"
 KEYFILE_DIR="/etc/luks-keys"
 
 echo "Starting Hetzner auto-unlock setup..."
+
+# Detect number of disks
+DISK_COUNT=$(lsblk -d -n -o TYPE,NAME | grep -c '^disk' || echo "0")
+echo "Detected $DISK_COUNT disk(s)"
+
+# Detect LUKS device based on disk configuration
+if [ "$DISK_COUNT" -eq 3 ]; then
+    # 3-disk setup uses single disk (no RAID)
+    echo "3-disk configuration detected, using single disk LUKS partition"
+    LUKS_DEVICE=$(blkid -t TYPE=crypto_LUKS -o device | head -1)
+    if [ -z "$LUKS_DEVICE" ]; then
+        echo "ERROR: No LUKS device found on single disk"
+        exit 1
+    fi
+    echo "Detected single disk LUKS device: $LUKS_DEVICE"
+else
+    # 2 or 4 disk setup uses RAID
+    echo "RAID configuration detected, looking for md device"
+    BIGGEST_MD=$(awk '/^md[0-9]+ : active/ {print $1, $5}' /proc/mdstat | sort -k2 -nr | head -1 | cut -d' ' -f1)
+    if [ -z "$BIGGEST_MD" ]; then
+        echo "ERROR: No RAID device found in /proc/mdstat"
+        exit 1
+    fi
+    LUKS_DEVICE="/dev/$BIGGEST_MD"
+    echo "Detected RAID device: $LUKS_DEVICE"
+fi
 
 # Create directory for key files
 mkdir -p "$KEYFILE_DIR"
