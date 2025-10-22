@@ -27,6 +27,7 @@ BOOTLOADER grub
 PART /boot ext4 1G
 PART /     %s all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
+SSHKEYS_URL /root/.ssh/authorized_keys
 HOSTNAME %s`, cryptPassword, drive1, filesystemType, arch, serverName)
 		} else {
 			content = fmt.Sprintf(`CRYPTPASSWORD %s
@@ -36,6 +37,7 @@ PART /boot/efi esp 512M
 PART /boot ext4 1G
 PART /     %s all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
+SSHKEYS_URL /root/.ssh/authorized_keys
 HOSTNAME %s`, cryptPassword, drive1, filesystemType, arch, serverName)
 		}
 	} else {
@@ -50,6 +52,7 @@ BOOTLOADER grub
 PART /boot ext4 1G
 PART /     %s all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
+SSHKEYS_URL /root/.ssh/authorized_keys
 HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, filesystemType, arch, serverName)
 		} else {
 			content = fmt.Sprintf(`CRYPTPASSWORD %s
@@ -62,6 +65,7 @@ PART /boot/efi esp 512M
 PART /boot ext4 1G
 PART /     %s all crypt
 IMAGE /root/images/Ubuntu-2404-noble-%s-base.tar.gz
+SSHKEYS_URL /root/.ssh/authorized_keys
 HOSTNAME %s`, cryptPassword, drive1, drive2, raidLevel, filesystemType, arch, serverName)
 		}
 	}
