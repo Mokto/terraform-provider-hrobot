@@ -287,7 +287,7 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 
 	// Select disks based on count:
 	// 2 disks: use both (RAID)
-	// 3 disks: use only the largest (no RAID)
+	// 3 disks: use only the largest (no RAID), wipe the 2 smaller
 	// 4 disks: use the 2 largest (RAID)
 	var drive1, drive2 string
 	var unusedDisks []string
@@ -308,7 +308,7 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		// Use only the largest disk (no RAID)
 		drive1 = disks[0].name
 		drive2 = "" // No second drive
-		// Mark the 2 smaller disks as unused
+		// Mark the 2 smaller disks as unused - IMPORTANT: wipe these BEFORE installimage
 		unusedDisks = []string{disks[1].name, disks[2].name}
 		tflog.Info(ctx, "selected largest disk only (no RAID)", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
@@ -361,6 +361,49 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 	filesystemType := "ext4"
 	if !plan.FilesystemType.IsNull() && !plan.FilesystemType.IsUnknown() {
 		filesystemType = plan.FilesystemType.ValueString()
+	}
+
+	// Wipe unused disks BEFORE running installimage to prevent confusion
+	if len(unusedDisks) > 0 {
+		tflog.Info(ctx, "wiping unused disks before installation", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"unused_disks":  unusedDisks,
+		})
+
+		for _, disk := range unusedDisks {
+			// Stop any RAID arrays on this disk
+			wipeCmd := fmt.Sprintf(`
+				# Unmount any partitions
+				umount -f %s* 2>/dev/null || true
+				umount -f %sp* 2>/dev/null || true
+
+				# Remove from RAID arrays
+				mdadm --stop --scan 2>/dev/null || true
+				mdadm --zero-superblock %s 2>/dev/null || true
+				for part in %s* %sp*; do
+					[ -b "$part" ] && mdadm --zero-superblock "$part" 2>/dev/null || true
+				done
+
+				# Wipe the disk
+				dd if=/dev/zero of=%s bs=1M count=100 2>/dev/null || true
+				wipefs -a %s 2>/dev/null || true
+
+				echo "Wiped disk %s"
+			`, disk, disk, disk, disk, disk, disk, disk, disk)
+
+			if _, err := sshx.Run(conn, wipeCmd); err != nil {
+				tflog.Warn(ctx, "failed to wipe unused disk", map[string]interface{}{
+					"server_number": plan.ServerNumber.ValueInt64(),
+					"disk":          disk,
+					"error":         err.Error(),
+				})
+			}
+		}
+
+		tflog.Info(ctx, "unused disks wiped successfully", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"unused_disks":  unusedDisks,
+		})
 	}
 
 	autosetupContent := buildAutosetupContent(serverName, arch, cryptPassword, filesystemType, raidLevel, drive1, drive2, noUEFI)

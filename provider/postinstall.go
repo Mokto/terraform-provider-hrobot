@@ -90,26 +90,34 @@ echo "Detected $DISK_COUNT disk(s)"
 # Detect LUKS device based on disk configuration
 if [ "$DISK_COUNT" -eq 3 ]; then
     # 3-disk setup uses single disk (no RAID)
-    echo "3-disk configuration detected, using single disk LUKS partition"
+    # Find the largest disk by looking at all disks and sorting by size
+    echo "3-disk configuration detected, finding largest disk for LUKS partition"
 
-    # Find the LUKS device by looking at what's currently mounted
-    # The root partition is encrypted, so find its backing device
-    ROOT_DEVICE=$(findmnt -n -o SOURCE /)
-    echo "Root filesystem is on: $ROOT_DEVICE"
+    # List all disks with their sizes, sort by size descending, take the largest
+    LARGEST_DISK=$(lsblk -d -b -n -o NAME,SIZE,TYPE | grep disk | sort -k2 -rn | head -1 | awk '{print "/dev/" $1}')
+    echo "Largest disk: $LARGEST_DISK"
 
-    if [[ "$ROOT_DEVICE" == /dev/mapper/* ]]; then
-        # This is a mapped device, find the underlying LUKS device
-        MAPPER_NAME=$(basename "$ROOT_DEVICE")
-        LUKS_DEVICE=$(cryptsetup status "$MAPPER_NAME" | grep device: | awk '{print $2}')
-        echo "Found LUKS device from active mapping: $LUKS_DEVICE"
-    else
-        # Fallback: try to find LUKS device by type
-        LUKS_DEVICE=$(blkid -t TYPE=crypto_LUKS -o device | head -1)
-        echo "Found LUKS device by blkid: $LUKS_DEVICE"
+    if [ -z "$LARGEST_DISK" ]; then
+        echo "ERROR: Could not determine largest disk"
+        exit 1
+    fi
+
+    # Find the LUKS partition on this disk (should be the last/largest partition)
+    LUKS_DEVICE=$(blkid -t TYPE=crypto_LUKS -o device | grep "^${LARGEST_DISK}" | tail -1)
+
+    if [ -z "$LUKS_DEVICE" ]; then
+        # Try alternative approach: find by looking at partitions on the largest disk
+        echo "Trying alternative LUKS detection method..."
+        LUKS_DEVICE=$(lsblk -n -o NAME,FSTYPE "${LARGEST_DISK}" | grep crypto_LUKS | head -1 | awk '{print "/dev/" $1}')
     fi
 
     if [ -z "$LUKS_DEVICE" ]; then
-        echo "ERROR: No LUKS device found on single disk"
+        echo "ERROR: No LUKS device found on largest disk $LARGEST_DISK"
+        echo "Available block devices:"
+        lsblk
+        echo ""
+        echo "LUKS devices found:"
+        blkid -t TYPE=crypto_LUKS
         exit 1
     fi
     echo "Detected single disk LUKS device: $LUKS_DEVICE"
