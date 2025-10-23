@@ -547,8 +547,40 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 		return "upload initialize", err.Error()
 	}
 
-	if _, err := sshx.Run(conn, "chmod +x /root/initialize.sh && /root/initialize.sh"); err != nil {
-		tflog.Warn(ctx, "failed to run script permissions", map[string]interface{}{
+	// DON'T run initialize.sh before reboot - the network config with optional:false
+	// will block the boot process. We'll run it after reboot when the system is stable.
+	tflog.Info(ctx, "initialize.sh uploaded, will run after reboot", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+	})
+
+	// Create a systemd service to run initialize.sh on first boot
+	firstBootService := `[Unit]
+Description=Run initialization script on first boot
+After=network.target
+ConditionPathExists=/root/initialize.sh
+ConditionPathExists=!/var/lib/initialize-completed
+
+[Service]
+Type=oneshot
+ExecStart=/root/initialize.sh
+ExecStartPost=/usr/bin/touch /var/lib/initialize-completed
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+`
+
+	if err := sshx.Upload(conn, "/etc/systemd/system/initialize-firstboot.service", []byte(firstBootService), 0644); err != nil {
+		tflog.Warn(ctx, "failed to upload firstboot service", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"error":         err.Error(),
+		})
+	}
+
+	// Enable the service to run on next boot
+	if _, err := sshx.Run(conn, "systemctl enable initialize-firstboot.service"); err != nil {
+		tflog.Warn(ctx, "failed to enable firstboot service", map[string]interface{}{
 			"server_number": plan.ServerNumber.ValueInt64(),
 			"error":         err.Error(),
 		})
@@ -583,8 +615,24 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 	time.Sleep(10 * time.Second)
 
 	// Wait for SSH port to become available again
-	if err := waitTCP(ip+":22", 10*time.Minute); err != nil {
-		return "reboot ssh timeout", err.Error()
+	// Increased timeout to 20 minutes because:
+	// - System needs to boot
+	// - LUKS decryption happens
+	// - Network configuration with optional:false blocks boot
+	// - Initialize script runs and configures VLAN (up to 2 minutes)
+	// - SSH daemon starts
+	tflog.Info(ctx, "waiting for SSH to become available (timeout: 20 minutes)", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_ip":     ip,
+	})
+
+	if err := waitTCP(ip+":22", 20*time.Minute); err != nil {
+		return "reboot ssh timeout", fmt.Sprintf("SSH did not come up within 20 minutes after reboot. This could indicate:\n"+
+			"1. System failed to boot\n"+
+			"2. LUKS auto-unlock failed\n"+
+			"3. Network configuration with optional:false is blocking boot\n"+
+			"4. You may need to access via emergency SSH on port 2222\n"+
+			"Original error: %v", err)
 	}
 
 	tflog.Info(ctx, "server back online after reboot, waiting for network connectivity", map[string]interface{}{
@@ -598,6 +646,60 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 		return "post-reboot ssh connect", err.Error()
 	}
 	defer postRebootCloseFn()
+
+	// Wait for the initialize-firstboot service to complete
+	tflog.Info(ctx, "waiting for initialization script to complete", map[string]interface{}{
+		"server_number": plan.ServerNumber.ValueInt64(),
+		"server_ip":     ip,
+	})
+
+	waitForInitScript := `
+#!/bin/bash
+MAX_WAIT=300  # 5 minutes max
+ELAPSED=0
+
+echo "Waiting for initialize-firstboot.service to complete..."
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+    # Check if the service has completed
+    if systemctl is-active initialize-firstboot.service >/dev/null 2>&1; then
+        echo "Service is still running... ($ELAPSED/$MAX_WAIT seconds)"
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+        continue
+    fi
+
+    # Check if completion marker exists
+    if [ -f /var/lib/initialize-completed ]; then
+        echo "✓ Initialization completed successfully"
+        exit 0
+    fi
+
+    # Check if service failed
+    if systemctl is-failed initialize-firstboot.service >/dev/null 2>&1; then
+        echo "⚠ WARNING: initialize-firstboot.service failed"
+        echo "Service status:"
+        systemctl status initialize-firstboot.service || true
+        echo ""
+        echo "Service logs:"
+        journalctl -u initialize-firstboot.service -n 50 || true
+        exit 1
+    fi
+
+    sleep 2
+    ELAPSED=$((ELAPSED + 2))
+done
+
+echo "⚠ WARNING: Initialization script did not complete within $MAX_WAIT seconds"
+exit 1
+`
+
+	if _, err := sshx.Run(postRebootConn, waitForInitScript); err != nil {
+		tflog.Warn(ctx, "initialization script did not complete successfully", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"error":         err.Error(),
+		})
+		// Don't fail - continue anyway, we'll check network connectivity next
+	}
 
 	// Wait for ping to 10.0.0.120 to succeed
 	pingScript := `
