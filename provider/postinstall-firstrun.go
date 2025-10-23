@@ -60,11 +60,26 @@ if [ -n "$LOCAL_IP" ] && [ "$LOCAL_IP" != "" ]; then
     fi
     echo "Using default interface: $DEFAULT_IFACE"
 
-    # Create netplan configuration
+    # Wait for default interface to be fully up
+    echo "Waiting for default interface to be ready..."
+    for i in {1..30}; do
+        if ip link show "$DEFAULT_IFACE" | grep -q "state UP"; then
+            echo "✓ Interface $DEFAULT_IFACE is up"
+            break
+        fi
+        echo "Waiting for $DEFAULT_IFACE to come up... ($i/30)"
+        sleep 1
+    done
+
+    # Create netplan configuration with optimized settings
     mkdir -p /etc/netplan
     cat > /etc/netplan/50-local-ip.yaml << EOF
 network:
   version: 2
+  ethernets:
+    ${DEFAULT_IFACE}:
+      mtu: 1500
+      optional: false
   vlans:
     ${DEFAULT_IFACE}.4001:
       id: 4001
@@ -75,14 +90,84 @@ network:
       routes:
         - to: "10.0.0.0/16"
           via: "10.1.0.1"
+          metric: 100
+      optional: false
+      accept-ra: false
 EOF
 
     echo "Netplan configuration created"
 
-    # Generate and apply netplan
+    # Generate and apply netplan with retry logic
     echo "Applying netplan configuration..."
-    netplan generate
-    netplan apply
+
+    # First, generate the configuration
+    if ! netplan generate; then
+        echo "ERROR: netplan generate failed"
+        exit 1
+    fi
+
+    # Apply with timeout and retry
+    APPLY_RETRIES=3
+    APPLY_SUCCESS=false
+    for i in $(seq 1 $APPLY_RETRIES); do
+        echo "Applying netplan (attempt $i/$APPLY_RETRIES)..."
+        if timeout 30 netplan apply; then
+            APPLY_SUCCESS=true
+            echo "✓ Netplan applied successfully"
+            break
+        else
+            echo "⚠ Netplan apply failed or timed out (attempt $i/$APPLY_RETRIES)"
+            sleep 5
+        fi
+    done
+
+    if [ "$APPLY_SUCCESS" != "true" ]; then
+        echo "ERROR: Failed to apply netplan after $APPLY_RETRIES attempts"
+        exit 1
+    fi
+
+    # Wait for VLAN interface to come up
+    echo "Waiting for VLAN interface ${DEFAULT_IFACE}.4001 to be ready..."
+    VLAN_READY=false
+    for i in {1..60}; do
+        if ip link show "${DEFAULT_IFACE}.4001" 2>/dev/null | grep -q "state UP"; then
+            VLAN_IP=$(ip addr show "${DEFAULT_IFACE}.4001" | grep "inet " | awk '{print $2}')
+            if [ -n "$VLAN_IP" ]; then
+                echo "✓ VLAN interface ${DEFAULT_IFACE}.4001 is up with IP: $VLAN_IP"
+                VLAN_READY=true
+                break
+            fi
+        fi
+        echo "Waiting for VLAN interface to be ready... ($i/60)"
+        sleep 1
+    done
+
+    if [ "$VLAN_READY" != "true" ]; then
+        echo "⚠ WARNING: VLAN interface did not come up within expected time"
+        echo "Current network state:"
+        ip addr
+        echo ""
+        echo "Routes:"
+        ip route
+    else
+        # Verify connectivity to gateway
+        echo "Verifying connectivity to gateway 10.1.0.1..."
+        PING_SUCCESS=false
+        for i in {1..30}; do
+            if ping -c 1 -W 2 -I "${DEFAULT_IFACE}.4001" 10.1.0.1 >/dev/null 2>&1; then
+                echo "✓ Successfully reached gateway 10.1.0.1"
+                PING_SUCCESS=true
+                break
+            fi
+            echo "Waiting for gateway to respond... ($i/30)"
+            sleep 2
+        done
+
+        if [ "$PING_SUCCESS" != "true" ]; then
+            echo "⚠ WARNING: Could not ping gateway 10.1.0.1"
+            echo "This may cause connectivity issues but continuing anyway..."
+        fi
+    fi
 
     echo "Local IP configuration completed"
 else
