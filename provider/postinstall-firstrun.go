@@ -165,8 +165,28 @@ EOF
 
         if [ "$PING_SUCCESS" != "true" ]; then
             echo "⚠ WARNING: Could not ping gateway 10.1.0.1"
-            echo "This may cause connectivity issues but continuing anyway..."
+            echo "Gateway may not respond to ping but still forward traffic"
         fi
+
+        # Send gratuitous ARP to announce our presence on the network
+        # This helps the gateway and other nodes learn about us faster
+        echo "Announcing presence on VLAN network..."
+
+        # Use ip command to flush neighbor cache (forces re-discovery)
+        ip neigh flush dev "${DEFAULT_IFACE}.4001" 2>/dev/null || true
+
+        # Send broadcast pings to announce ourselves (no additional packages needed)
+        # -b = broadcast, -c = count, -W = timeout
+        ping -b -c 3 -W 1 -I "${DEFAULT_IFACE}.4001" 10.1.0.255 >/dev/null 2>&1 || true
+
+        # Try to contact the gateway multiple times
+        # Even if ping fails, the ARP request will announce us
+        for i in {1..3}; do
+            ping -c 1 -W 1 -I "${DEFAULT_IFACE}.4001" 10.1.0.1 >/dev/null 2>&1 || true
+            sleep 1
+        done
+
+        echo "✓ Network announcement completed"
     fi
 
     echo "Local IP configuration completed"

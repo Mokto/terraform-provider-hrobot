@@ -556,16 +556,18 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 	// Create a systemd service to run initialize.sh on first boot
 	firstBootService := `[Unit]
 Description=Run initialization script on first boot
-After=network.target
+After=network-online.target
+Wants=network-online.target
 ConditionPathExists=/root/initialize.sh
 ConditionPathExists=!/var/lib/initialize-completed
 
 [Service]
 Type=oneshot
-ExecStart=/root/initialize.sh
+ExecStart=/usr/bin/bash /root/initialize.sh
 ExecStartPost=/usr/bin/touch /var/lib/initialize-completed
 StandardOutput=journal+console
 StandardError=journal+console
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
