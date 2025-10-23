@@ -187,6 +187,44 @@ EOF
         done
 
         echo "✓ Network announcement completed"
+
+        # Create ARP keepalive service to prevent gateway ARP expiration
+        # The gateway may not respond to pings but needs to stay in ARP cache
+        echo "Setting up ARP keepalive service for gateway stability..."
+
+        GATEWAY_MAC=$(ip neigh show 10.1.0.1 dev "${DEFAULT_IFACE}.4001" | awk '{print $5}' | head -1)
+        if [ -z "$GATEWAY_MAC" ]; then
+            echo "⚠ WARNING: Could not determine gateway MAC address, using default"
+            GATEWAY_MAC="f2:0b:a4:d1:20:01"
+        else
+            echo "Gateway MAC address: $GATEWAY_MAC"
+        fi
+
+        cat > /etc/systemd/system/vlan-arp-keepalive.service << EOF
+[Unit]
+Description=Keep VLAN gateway ARP entry alive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=30
+ExecStart=/usr/bin/bash -c 'while true; do ip neigh replace 10.1.0.1 lladdr ${GATEWAY_MAC} dev ${DEFAULT_IFACE}.4001 nud reachable 2>/dev/null || true; sleep 30; done'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+        systemctl daemon-reload
+        systemctl enable vlan-arp-keepalive.service
+        systemctl start vlan-arp-keepalive.service
+
+        if systemctl is-active vlan-arp-keepalive.service >/dev/null 2>&1; then
+            echo "✓ ARP keepalive service started successfully"
+        else
+            echo "⚠ WARNING: ARP keepalive service may not have started correctly"
+        fi
     fi
 
     echo "Local IP configuration completed"
