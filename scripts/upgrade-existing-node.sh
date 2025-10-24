@@ -235,6 +235,30 @@ fi
 
 echo ""
 echo "=========================================="
+echo "Step 8: Configuring K3S Docker registry mirror"
+echo "=========================================="
+
+mkdir -p /etc/rancher/k3s
+cat > /etc/rancher/k3s/registries.yaml << 'EOF'
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry-1.docker.io"
+EOF
+
+echo "✓ K3S registry mirror configured"
+
+# Restart k3s if it's running to pick up the new configuration
+if systemctl is-active k3s.service >/dev/null 2>&1 || systemctl is-active k3s-agent.service >/dev/null 2>&1; then
+    echo "Restarting K3S to apply registry mirror configuration..."
+    systemctl restart k3s.service 2>/dev/null || systemctl restart k3s-agent.service 2>/dev/null || true
+    echo "✓ K3S restarted"
+else
+    echo "K3S not running, configuration will be applied on next start"
+fi
+
+echo ""
+echo "=========================================="
 echo "Upgrade Complete!"
 echo "=========================================="
 echo ""

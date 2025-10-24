@@ -286,5 +286,17 @@ else
     echo "CPU frequency scaling not available or not supported on this system"
 fi
 
+# Configure K3S Docker registry mirror
+echo "Configuring K3S Docker registry mirror..."
+mkdir -p /etc/rancher/k3s
+cat > /etc/rancher/k3s/registries.yaml << 'EOF'
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry-1.docker.io"
+EOF
+
+echo "✓ K3S registry mirror configured"
+
 # EXTRASCRIPTREPLACEME
 `
