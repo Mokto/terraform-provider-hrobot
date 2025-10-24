@@ -209,8 +209,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 Restart=always
-RestartSec=30
-ExecStart=/usr/bin/bash -c 'while true; do ip neigh replace 10.1.0.1 lladdr ${GATEWAY_MAC} dev ${DEFAULT_IFACE}.4001 nud reachable 2>/dev/null || true; sleep 30; done'
+RestartSec=5
+ExecStart=/usr/bin/bash -c 'while true; do ip neigh replace 10.1.0.1 lladdr ${GATEWAY_MAC} dev ${DEFAULT_IFACE}.4001 nud reachable 2>/dev/null || true; sleep 10; done'
 
 [Install]
 WantedBy=multi-user.target
