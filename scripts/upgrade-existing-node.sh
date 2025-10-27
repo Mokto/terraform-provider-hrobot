@@ -22,12 +22,7 @@ echo "  5. Reboot the server"
 echo ""
 echo "⚠️  WARNING: This will cause a brief network interruption and reboot!"
 echo ""
-read -p "Continue? (yes/no): " CONFIRM
 
-if [ "$CONFIRM" != "yes" ]; then
-    echo "Aborted."
-    exit 1
-fi
 
 echo ""
 echo "=========================================="
