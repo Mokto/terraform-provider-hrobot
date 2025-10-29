@@ -46,6 +46,9 @@ type configurationModel struct {
 	Taints     types.List   `tfsdk:"taints"`
 	CPUManager types.Bool   `tfsdk:"cpu_manager"`
 
+	// Docker parameters
+	InstallDocker types.Bool `tfsdk:"install_docker"`
+
 	RescueKeyFPs types.List `tfsdk:"rescue_authorized_key_fingerprints"`
 }
 
@@ -116,6 +119,12 @@ func (r *configurationResource) Schema(_ context.Context, _ resource.SchemaReque
 			"cpu_manager": rschema.BoolAttribute{
 				Optional:    true,
 				Description: "Enable CPU manager with static policy and resource reservations (cpu-manager-policy=static, system-reserved=cpu=1, kube-reserved=cpu=1)",
+			},
+
+			// Docker parameters
+			"install_docker": rschema.BoolAttribute{
+				Optional:    true,
+				Description: "Install Docker Engine and Docker Compose during provisioning (default: false)",
 			},
 
 			"rescue_authorized_key_fingerprints": rschema.ListAttribute{

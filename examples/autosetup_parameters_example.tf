@@ -47,6 +47,9 @@ resource "hrobot_configuration" "web_server_amd64" {
     "localstorage=true:NoSchedule"
   ]
 
+  # Optional: Install Docker (default: false)
+  install_docker = true
+
   # SSH key fingerprints for rescue mode access
   rescue_authorized_key_fingerprints = [
     "your-ssh-key-fingerprint-here"

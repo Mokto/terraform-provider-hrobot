@@ -141,6 +141,63 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 	return scriptStr
 }
 
+// buildDockerScript generates Docker installation script from parameters
+func buildDockerScript(plan configurationModel, ctx context.Context) string {
+	if plan.InstallDocker.IsNull() || plan.InstallDocker.IsUnknown() || !plan.InstallDocker.ValueBool() {
+		tflog.Info(ctx, "Docker installation not requested, skipping")
+		return "echo 'Docker installation not requested, skipping'"
+	}
+
+	tflog.Info(ctx, "Docker installation requested, generating installation script")
+
+	return `echo "Installing Docker..."
+
+# Remove any old Docker packages
+apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+
+# Update package index
+apt-get update
+
+# Install prerequisites
+apt-get install -y \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release
+
+# Add Docker's official GPG key
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+
+# Set up the Docker repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Update package index again
+apt-get update
+
+# Install Docker Engine, containerd, and Docker Compose
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Enable and start Docker service
+systemctl enable docker
+systemctl start docker
+
+# Verify Docker installation
+if docker --version && docker compose version; then
+    echo "✓ Docker installed successfully"
+    docker --version
+    docker compose version
+else
+    echo "⚠ Warning: Docker installation may have issues"
+fi
+
+echo "Docker installation completed"
+`
+}
+
 func (r *configurationResource) configure(fp []string, ip string, plan configurationModel, ctx context.Context) (string, string) {
 
 	summary, error := r.preInstall(fp, ip, plan, ctx)
@@ -535,8 +592,11 @@ func (r *configurationResource) postInstallFirstRun(fp []string, ip string, plan
 	// Build K3S installation script
 	k3sScript := buildK3SScript(plan, ctx)
 
+	// Build Docker installation script
+	dockerScript := buildDockerScript(plan, ctx)
+
 	postinstallFirstRunContent := strings.ReplaceAll(postinstallFirstRunScript, "LOCALIPADDRESSREPLACEME", localIP)
-	postinstallFirstRunContent = strings.ReplaceAll(postinstallFirstRunContent, "# EXTRASCRIPTREPLACEME", "")
+	postinstallFirstRunContent = strings.ReplaceAll(postinstallFirstRunContent, "# EXTRASCRIPTREPLACEME", dockerScript)
 
 	tflog.Info(ctx, "uploading postinstall - first run script", map[string]interface{}{
 		"server_number": plan.ServerNumber.ValueInt64(),
