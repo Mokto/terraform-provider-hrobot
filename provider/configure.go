@@ -302,10 +302,10 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 		return "disk detection failed", fmt.Sprintf("Failed to detect disks: %v", err)
 	}
 
-	// Parse disk output to get 2, 3, or 4 disks
+	// Parse disk output to get 1, 2, 3, or 4 disks
 	diskLines := strings.Split(strings.TrimSpace(diskOutput), "\n")
-	if len(diskLines) < 2 || len(diskLines) > 4 {
-		return "invalid disk count", fmt.Sprintf("Expected 2-4 disks, found %d disks: %s", len(diskLines), diskOutput)
+	if len(diskLines) < 1 || len(diskLines) > 4 {
+		return "invalid disk count", fmt.Sprintf("Expected 1-4 disks, found %d disks: %s", len(diskLines), diskOutput)
 	}
 
 	// Parse disk information (name and size in bytes)
@@ -343,13 +343,24 @@ func (r *configurationResource) preInstall(fp []string, ip string, plan configur
 	}
 
 	// Select disks based on count:
+	// 1 disk:  use single disk (no RAID)
 	// 2 disks: use both (RAID)
 	// 3 disks: use only the largest (no RAID), wipe the 2 smaller
 	// 4 disks: use the 2 largest (RAID)
 	var drive1, drive2 string
 	var unusedDisks []string
 
-	if len(disks) == 2 {
+	if len(disks) == 1 {
+		// Use single disk (no RAID)
+		drive1 = disks[0].name
+		drive2 = "" // No second drive
+		tflog.Info(ctx, "selected single disk (no RAID)", map[string]interface{}{
+			"server_number": plan.ServerNumber.ValueInt64(),
+			"drive1":        drive1,
+			"drive1_bytes":  disks[0].sizeBytes,
+		})
+		// No unused disks
+	} else if len(disks) == 2 {
 		// Use both disks for RAID
 		drive1 = disks[0].name
 		drive2 = disks[1].name

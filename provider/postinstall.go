@@ -14,7 +14,7 @@ UNUSED_DISKS="UNUSEDDISKSREPLACEME"
 
 echo "Starting Hetzner auto-unlock setup..."
 
-# Wipe and disable unused disks (3 and 4 disk setups only)
+# Wipe and disable unused disks (3 and 4 disk setups only; 1 and 2 disk setups have no unused disks)
 if [ -n "$UNUSED_DISKS" ] && [ "$UNUSED_DISKS" != "" ]; then
     echo "============================================"
     echo "Wiping unused disks: $UNUSED_DISKS"
@@ -80,7 +80,7 @@ if [ -n "$UNUSED_DISKS" ] && [ "$UNUSED_DISKS" != "" ]; then
     echo "============================================"
     echo ""
 else
-    echo "No unused disks to wipe (2-disk setup)"
+    echo "No unused disks to wipe (1 or 2-disk setup)"
 fi
 
 # Detect number of disks
@@ -88,10 +88,10 @@ DISK_COUNT=$(lsblk -d -n -o TYPE,NAME | grep -c '^disk' || echo "0")
 echo "Detected $DISK_COUNT disk(s)"
 
 # Detect LUKS device based on disk configuration
-if [ "$DISK_COUNT" -eq 3 ]; then
-    # 3-disk setup uses single disk (no RAID)
+if [ "$DISK_COUNT" -eq 1 ] || [ "$DISK_COUNT" -eq 3 ]; then
+    # 1-disk or 3-disk setup uses single disk (no RAID)
     # Find the largest disk by looking at all disks and sorting by size
-    echo "3-disk configuration detected, finding largest disk for LUKS partition"
+    echo "$DISK_COUNT-disk configuration detected, finding largest disk for LUKS partition"
 
     # List all disks with their sizes, sort by size descending, take the largest
     LARGEST_DISK=$(lsblk -d -b -n -o NAME,SIZE,TYPE | grep disk | sort -k2 -rn | head -1 | awk '{print "/dev/" $1}')
