@@ -89,6 +89,15 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 	// Build kubelet arguments
 	var kubeletArgs []string
 
+	// Add node IP if local IP is provided (use private VLAN IP for cluster communication)
+	if !plan.LocalIP.IsNull() && !plan.LocalIP.IsUnknown() {
+		localIP := plan.LocalIP.ValueString()
+		kubeletArgs = append(kubeletArgs, fmt.Sprintf("--node-ip=%s", localIP))
+		tflog.Info(ctx, "K3S will use local IP for node communication", map[string]interface{}{
+			"local_ip": localIP,
+		})
+	}
+
 	kubeletArgs = append(kubeletArgs, "--kubelet-arg=\"--cloud-provider=external\"")
 
 	// Add node labels
