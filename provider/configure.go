@@ -88,6 +88,7 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 
 	// Build kubelet arguments
 	var kubeletArgs []string
+	needsFlannelIface := false
 
 	// Add node IP if local IP is provided (use private VLAN IP for cluster communication)
 	if !plan.LocalIP.IsNull() && !plan.LocalIP.IsUnknown() {
@@ -106,10 +107,10 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 			})
 		}
 
-		// Add flannel interface to use VLAN interface for overlay network
-		kubeletArgs = append(kubeletArgs, "--flannel-iface=enp9s0.4001")
+		// Mark that we need to add flannel interface (will be added dynamically in the script)
+		needsFlannelIface = true
 		tflog.Info(ctx, "K3S will use VLAN interface for Flannel overlay network", map[string]interface{}{
-			"flannel_iface": "enp9s0.4001",
+			"flannel_iface": "$(default_interface).4001 (dynamic)",
 		})
 	}
 
@@ -146,12 +147,37 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 	}
 
 	// Build the complete K3S installation command
+	// If we need flannel interface, detect it dynamically at runtime
+	if needsFlannelIface {
+		script.WriteString("\n# Detect VLAN interface for Flannel\n")
+		script.WriteString("DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}' | head -1)\n")
+		script.WriteString("if [ -z \"$DEFAULT_IFACE\" ]; then\n")
+		script.WriteString("  echo 'ERROR: Could not detect default network interface'\n")
+		script.WriteString("  exit 1\n")
+		script.WriteString("fi\n")
+		script.WriteString("VLAN_IFACE=\"${DEFAULT_IFACE}.4001\"\n")
+		script.WriteString("echo \"Detected VLAN interface: $VLAN_IFACE\"\n")
+		script.WriteString("\n# Verify VLAN interface exists\n")
+		script.WriteString("if ! ip link show \"$VLAN_IFACE\" >/dev/null 2>&1; then\n")
+		script.WriteString("  echo \"ERROR: VLAN interface $VLAN_IFACE does not exist\"\n")
+		script.WriteString("  echo \"Available interfaces:\"\n")
+		script.WriteString("  ip link show\n")
+		script.WriteString("  exit 1\n")
+		script.WriteString("fi\n")
+		script.WriteString("echo \"✓ VLAN interface $VLAN_IFACE is available\"\n\n")
+	}
+
 	script.WriteString(fmt.Sprintf("curl -sfL https://get.k3s.io | K3S_URL=\"%s\" K3S_TOKEN=%s \\\n", k3sURL, k3sToken))
 	script.WriteString("  sh -s - \\\n")
 
 	// Add all kubelet arguments
 	for _, arg := range kubeletArgs {
 		script.WriteString(fmt.Sprintf("  %s \\\n", arg))
+	}
+
+	// Add flannel interface dynamically if needed
+	if needsFlannelIface {
+		script.WriteString("  --flannel-iface=\"$VLAN_IFACE\" \\\n")
 	}
 
 	// Remove the trailing backslash and newline from the last argument
