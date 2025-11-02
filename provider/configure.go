@@ -96,6 +96,21 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 		tflog.Info(ctx, "K3S will use local IP for node communication", map[string]interface{}{
 			"local_ip": localIP,
 		})
+
+		// Add external IP if server IP is provided
+		if !plan.ServerIP.IsNull() && !plan.ServerIP.IsUnknown() {
+			externalIP := plan.ServerIP.ValueString()
+			kubeletArgs = append(kubeletArgs, fmt.Sprintf("--node-external-ip=%s", externalIP))
+			tflog.Info(ctx, "K3S will use server IP as external IP", map[string]interface{}{
+				"external_ip": externalIP,
+			})
+		}
+
+		// Add flannel interface to use VLAN interface for overlay network
+		kubeletArgs = append(kubeletArgs, "--flannel-iface=enp9s0.4001")
+		tflog.Info(ctx, "K3S will use VLAN interface for Flannel overlay network", map[string]interface{}{
+			"flannel_iface": "enp9s0.4001",
+		})
 	}
 
 	kubeletArgs = append(kubeletArgs, "--kubelet-arg=\"--cloud-provider=external\"")
@@ -131,7 +146,7 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 	}
 
 	// Build the complete K3S installation command
-	script.WriteString(fmt.Sprintf("curl -sfL https://get.k3s.io | K3S_URL=\"%s\" K3S_TOKEN=%s \\\n", k3sURL, k3sToken))
+q	script.WriteString(fmt.Sprintf("curl -sfL https://get.k3s.io | K3S_URL=\"%s\" K3S_TOKEN=%s \\\n", k3sURL, k3sToken))
 	script.WriteString("  sh -s - \\\n")
 
 	// Add all kubelet arguments
