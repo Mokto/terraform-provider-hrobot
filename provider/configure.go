@@ -146,7 +146,7 @@ func buildK3SScript(plan configurationModel, ctx context.Context) string {
 	}
 
 	// Build the complete K3S installation command
-q	script.WriteString(fmt.Sprintf("curl -sfL https://get.k3s.io | K3S_URL=\"%s\" K3S_TOKEN=%s \\\n", k3sURL, k3sToken))
+	script.WriteString(fmt.Sprintf("curl -sfL https://get.k3s.io | K3S_URL=\"%s\" K3S_TOKEN=%s \\\n", k3sURL, k3sToken))
 	script.WriteString("  sh -s - \\\n")
 
 	// Add all kubelet arguments
