@@ -168,10 +168,10 @@ EOF
             echo "Gateway may not respond to ping but still forward traffic"
         fi
 
-        # Install arping for ARP keepalive
+        # Install arping for ARP keepalive & smartmontools for disk health monitoring
         echo "Installing arping package..."
         apt-get update -qq
-        apt-get install -y arping
+        apt-get install -y arping smartmontools
         echo "✓ arping installed"
         echo ""
 
